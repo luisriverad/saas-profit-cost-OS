@@ -6,6 +6,7 @@ import Navbar from './components/Navbar';
 import LegendBar from './components/LegendBar';
 import Footer from './components/Footer';
 
+import DashboardGeneral from './modules/DashboardGeneral';
 import Dashboard from './modules/Dashboard';
 import VentaReal from './modules/VentaReal';
 import Ingenieria from './modules/Ingenieria';
@@ -15,8 +16,10 @@ import Contabilidad from './modules/Contabilidad';
 import Cuotas from './modules/Cuotas';
 import Costeo from './modules/Costeo';
 import PNLView from './modules/PNL';
+import Trazabilidad from './modules/Trazabilidad';
 
 const MODULES = {
+  general:      DashboardGeneral,
   dashboard:    Dashboard,
   ventaReal:    VentaReal,
   ingenieria:   Ingenieria,
@@ -26,10 +29,11 @@ const MODULES = {
   cuotas:       Cuotas,
   costeo:       Costeo,
   pnl:          PNLView,
+  trazabilidad: Trazabilidad,
 };
 
 export default function App() {
-  const [active, setActive] = useState('dashboard');
+  const [active, setActive] = useState('general');
 
   const handleChange = (id) => {
     setActive(id);

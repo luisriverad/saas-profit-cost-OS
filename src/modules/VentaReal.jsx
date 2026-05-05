@@ -47,9 +47,10 @@ function shiftSnapshot(base, label, scaleK, scaleP = 1) {
 }
 
 const PERIODS = [
-  VENTA_REAL,
-  shiftSnapshot(VENTA_REAL, 'DICIEMBRE 2025', 0.94, 0.985),
-  shiftSnapshot(VENTA_REAL, 'NOVIEMBRE 2025', 0.91, 0.97),
+  shiftSnapshot(VENTA_REAL, 'ENERO 2026',   0.92, 0.975),
+  shiftSnapshot(VENTA_REAL, 'FEBRERO 2026', 0.96, 0.99),
+  shiftSnapshot(VENTA_REAL, 'MARZO 2026',   1.02, 1.005),
+  shiftSnapshot(VENTA_REAL, 'ABRIL 2026',   0.98, 1.015),
 ];
 
 const csvEscape = (v) => {
@@ -99,15 +100,10 @@ export default function VentaReal() {
 
   const active = PERIODS[periodIdx];
   const { rows, totals, impacto, period } = active;
-  const atOldest = periodIdx === PERIODS.length - 1;
 
-  const handleMesAnterior = () => {
-    if (atOldest) {
-      setPeriodIdx(0);
-      flash('ok', `Volviendo a ${PERIODS[0].period}`);
-      return;
-    }
-    const next = periodIdx + 1;
+  const handleSelectMes = (e) => {
+    const next = parseInt(e.target.value, 10);
+    if (Number.isNaN(next)) return;
     setPeriodIdx(next);
     flash('ok', `Mostrando ${PERIODS[next].period}`);
   };
@@ -147,9 +143,18 @@ export default function VentaReal() {
         subtitle="Real vs Forecast · descomposición de variación por volumen y precio"
         actions={
           <>
-            <button className="btn" onClick={handleMesAnterior}>
-              {atOldest ? 'Volver al Mes Actual' : 'Mes Anterior'}
-            </button>
+            <label className="month-picker">
+              <span className="month-picker-label">RESULTADO DEL MES</span>
+              <select
+                className="month-picker-select"
+                value={periodIdx}
+                onChange={handleSelectMes}
+              >
+                {PERIODS.map((p, i) => (
+                  <option key={p.period} value={i}>{p.period}</option>
+                ))}
+              </select>
+            </label>
             <button className="btn" onClick={handleCompararForecast}>Comparar Forecast</button>
             <button className="btn btn-primary" onClick={handleExportar}>Exportar</button>
             {status && (
@@ -168,10 +173,10 @@ export default function VentaReal() {
           { label: 'Venta Neta',      value: `$${fmtMoneyNoDec(totals.ventaNeta)}`,
             delta: `vs Fcts ${fmtSignedM(totals.varVentas)}`,
             cls: totals.varVentas < 0 ? 'down' : '' },
-          { label: 'Variación · Volumen', value: fmtSignedM(impacto.volumen), delta: `${fmtMoneySigned(totals.varKgs)} KGS`,
+          { label: 'Variación · Volumen / vs. PTO 2026', value: fmtSignedM(impacto.volumen), delta: `${fmtMoneySigned(totals.varKgs)} KGS`,
             cls: totals.varKgs < 0 ? 'down' : '',
             valColor: impacto.volumen < 0 ? 'var(--neg)' : undefined },
-          { label: 'Variación · Precio', value: fmtSignedM(impacto.precio), delta: 'Mix de precio · descuentos',
+          { label: 'Variación · Precio / vs. PTO 2026', value: fmtSignedM(impacto.precio), delta: 'Mix de precio · descuentos',
             cls: '',
             valColor: impacto.precio < 0 ? 'var(--neg)' : undefined },
           { label: 'Neto vs Forecast',   value: fmtSignedM(impacto.neto),
@@ -188,7 +193,7 @@ export default function VentaReal() {
       </div>
 
       <Panel
-        title="Valuación de la Producción · Detalle por Producto"
+        title="Valuación de la Venta · Detalle por Producto"
         meta={`${period} · Real vs Forecast`}
         scrollX
       >
@@ -202,9 +207,9 @@ export default function VentaReal() {
               <th>VENTA BRUTA</th>
               <th>DESCUENTOS</th>
               <th>VENTA NETA</th>
-              <th>FCTS KGS</th>
+              <th className="fcts-col">FCTS KGS</th>
               <th>VAR KGS</th>
-              <th>FCTS VENTAS</th>
+              <th className="fcts-col">FCTS VENTAS</th>
               <th>VAR VENTAS</th>
               <th>X VOLUMEN</th>
               <th>X PRECIO</th>
@@ -222,11 +227,11 @@ export default function VentaReal() {
                   {r.descuentos > 0 ? `$${fmtMoneyNoDec(r.descuentos)}` : '—'}
                 </td>
                 <td className="num"><b>${fmtMoneyNoDec(r.ventaNeta)}</b></td>
-                <td className="num">{fmtUnits(r.fctsKgs)}</td>
+                <td className="num fcts-col">{fmtUnits(r.fctsKgs)}</td>
                 <td className="num" style={{ color: r.varKgs > 0 ? 'var(--pos)' : r.varKgs < 0 ? 'var(--neg)' : 'var(--ink-mute)' }}>
                   {fmtMoneySigned(r.varKgs)}
                 </td>
-                <td className="num">${fmtMoneyNoDec(r.fctsVentas)}</td>
+                <td className="num fcts-col">${fmtMoneyNoDec(r.fctsVentas)}</td>
                 <td className="num" style={{ color: r.varVentas > 0 ? 'var(--pos)' : r.varVentas < 0 ? 'var(--neg)' : 'var(--ink-mute)' }}>
                   {fmtMoneySigned(r.varVentas)}
                 </td>
@@ -246,9 +251,9 @@ export default function VentaReal() {
               <td className="num"><b>${fmtMoneyNoDec(totals.ventaBruta)}</b></td>
               <td className="num"><b>${fmtMoneyNoDec(totals.descuentos)}</b></td>
               <td className="num"><b>${fmtMoneyNoDec(totals.ventaNeta)}</b></td>
-              <td className="num"><b>{fmtUnits(totals.fctsKgs)}</b></td>
+              <td className="num fcts-col"><b>{fmtUnits(totals.fctsKgs)}</b></td>
               <td className="num" style={{ color: totals.varKgs >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.varKgs)}</b></td>
-              <td className="num"><b>${fmtMoneyNoDec(totals.fctsVentas)}</b></td>
+              <td className="num fcts-col"><b>${fmtMoneyNoDec(totals.fctsVentas)}</b></td>
               <td className="num" style={{ color: totals.varVentas >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.varVentas)}</b></td>
               <td className="num" style={{ color: totals.xVolumen >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.xVolumen)}</b></td>
               <td className="num" style={{ color: totals.xPrecio >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.xPrecio)}</b></td>
@@ -529,22 +534,58 @@ function buildAnalysis({ rows, totals, impacto, period }) {
   return { diagnostico, riesgos, acciones };
 }
 
-function AIAnalysis({ data }) {
-  const { diagnostico, riesgos, acciones } = buildAnalysis(data);
-  const stamp = new Date().toLocaleString('es-MX', {
+function fmtStamp(d) {
+  return d.toLocaleString('es-MX', {
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
+}
+
+function AIAnalysis({ data }) {
+  const [generated, setGenerated] = useState(() => ({
+    period: data.period,
+    stamp: fmtStamp(new Date()),
+    analysis: buildAnalysis(data),
+  }));
+  const [generating, setGenerating] = useState(false);
+
+  const stale = generated.period !== data.period;
+
+  const handleGenerate = () => {
+    if (generating) return;
+    setGenerating(true);
+    setTimeout(() => {
+      setGenerated({
+        period: data.period,
+        stamp: fmtStamp(new Date()),
+        analysis: buildAnalysis(data),
+      });
+      setGenerating(false);
+    }, 500);
+  };
+
+  const { diagnostico, riesgos, acciones } = generated.analysis;
 
   return (
     <Panel
       title="Análisis"
-      meta={`Generado · ${stamp}`}
+      meta={`Generado · ${generated.stamp}${stale ? ' · datos previos' : ''}`}
+      actions={
+        <button className="btn-ai" onClick={handleGenerate} disabled={generating}>
+          <span className="ai-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3l1.8 4.4L18 9l-4.2 1.6L12 15l-1.8-4.4L6 9l4.2-1.6L12 3z" />
+              <path d="M19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14z" />
+            </svg>
+          </span>
+          {generating ? 'Generando…' : 'Generar Análisis'}
+        </button>
+      }
     >
       <div className="ai-block">
         <div className="ai-banner">
           <span className="ai-badge">GEN</span>
           <span>
-            Síntesis automática a partir de los datos de <b>{data.period}</b>. Las recomendaciones son orientativas y deben validarse con el equipo responsable antes de ejecutarlas.
+            Síntesis automática a partir de los datos de <b>{generated.period}</b>. Las recomendaciones son orientativas y deben validarse con el equipo responsable antes de ejecutarlas.
           </span>
         </div>
 

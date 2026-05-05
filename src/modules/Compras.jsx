@@ -1,10 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
 import PageHeader from '../components/PageHeader';
 import Panel from '../components/Panel';
-import { RAW_MATERIALS, VARIATIONS } from '../data/seed';
+import {
+  RAW_MATERIALS, VARIATIONS,
+  PRODUCT_A_BOM, PRODUCT_A_ROUTING,
+  PRODUCT_B_BOM, PRODUCT_B_ROUTING,
+  PRODUCT_C_BOM, PRODUCT_C_ROUTING,
+  PRODUCTION_SCHEDULE, MONTHS,
+} from '../data/seed';
 import { fmtMoney, fmtMoneyNoDec, fmtUnits } from '../utils/format';
+import { logTraza } from '../utils/trazabilidad';
 
 const STORAGE_KEY = 'compras.workspace.v1';
+const ING_STORAGE_KEY = 'ingenieria.workspace.v2';
+
+const MP_COSTS = {
+  1001: 100, 1002: 55, 1003: 20, 1004: 34, 1005: 15,
+  1006: 67,  1007: 22, 1008: 35, 1009: 15, 1010: 10,
+};
+const mpCost = (code) => MP_COSTS[code] ?? 0;
+
+const ING_BASE_PRODUCTS = [
+  { code: 9001, name: 'PRODUCTO A', bom: PRODUCT_A_BOM, routing: PRODUCT_A_ROUTING },
+  { code: 9002, name: 'PRODUCTO B', bom: PRODUCT_B_BOM, routing: PRODUCT_B_ROUTING },
+  { code: 9003, name: 'PRODUCTO C', bom: PRODUCT_C_BOM, routing: PRODUCT_C_ROUTING },
+];
+
+const readIngStored = () => {
+  try {
+    const raw = window.localStorage.getItem(ING_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+};
 
 const MONTH_NAMES = [
   'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
@@ -25,17 +53,67 @@ const persist = (data) => {
 
 export default function Compras() {
   const stored = readStored();
+  const ingStored = readIngStored();
   const [mps, setMps] = useState(() => stored?.mps ?? RAW_MATERIALS);
   const [history, setHistory] = useState(() => stored?.history ?? []);
   const [showAdd, setShowAdd] = useState(false);
   const [showHist, setShowHist] = useState(false);
   const [status, setStatus] = useState(null);
+  const [mpBreakdown, setMpBreakdown] = useState(null); // { productCode, monthIdx }
+  const [authorized, setAuthorized] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [activePassword, setActivePassword] = useState(null);
   const timerRef = useRef(null);
+  const editingRef = useRef(null);
+
+  const ingProducts = ingStored?.products ?? ING_BASE_PRODUCTS;
+  const ingSchedule = ingStored?.schedule ?? PRODUCTION_SCHEDULE;
+
+  const guardProps = authorized
+    ? {}
+    : {
+        onMouseDownCapture: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof e.currentTarget.blur === 'function') e.currentTarget.blur();
+          setShowAuthModal(true);
+        },
+        onFocusCapture: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof e.target.blur === 'function') e.target.blur();
+          setShowAuthModal(true);
+        },
+      };
 
   const flash = (kind, text, ms = 2800) => {
     if (timerRef.current) clearTimeout(timerRef.current);
     setStatus({ kind, text });
     timerRef.current = setTimeout(() => setStatus(null), ms);
+  };
+
+  const handleAuthorize = (password) => {
+    setAuthorized(true);
+    setActivePassword(password);
+    setShowAuthModal(false);
+    flash('ok', 'Autorización concedida · puedes editar');
+    logTraza({ password, module: 'Compras', action: 'Autorización concedida' });
+  };
+
+  const traza = (action) => {
+    logTraza({ password: activePassword ?? '—', module: 'Compras', action });
+  };
+
+  const focusCell = (oldValue, action) => {
+    editingRef.current = { value: oldValue, action };
+  };
+  const blurCell = (newValue) => {
+    const e = editingRef.current;
+    editingRef.current = null;
+    if (!e) return;
+    if (String(e.value) !== String(newValue)) {
+      traza(`${e.action}: ${e.value} → ${newValue}`);
+    }
   };
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
@@ -53,13 +131,16 @@ export default function Compras() {
     persist({ mps: next, history });
     flash('ok', `Materia prima ${code} · ${name} agregada`);
     setShowAdd(false);
+    traza(`MP ${code} · ${name} agregada (Std $${costStd} · Real $${costReal})`);
   };
 
   const handleRemoveMp = (code) => {
+    const target = mps.find((m) => m.code === code);
     const next = mps.filter((m) => m.code !== code);
     setMps(next);
     persist({ mps: next, history });
     flash('ok', `MP ${code} eliminada`);
+    traza(`MP ${code} · ${target?.name ?? ''} eliminada`);
   };
 
   const handleCerrarMes = () => {
@@ -94,6 +175,7 @@ export default function Compras() {
     setHistory(newHistory);
     persist({ mps, history: newHistory });
     flash('ok', `Mes cerrado · ${period}`);
+    traza(`Cerró mes ${period} (Var Total: $${fmtMoneyNoDec(snapshot.totalVar)})`);
   };
 
   const handleDeleteHistory = (period) => {
@@ -103,6 +185,7 @@ export default function Compras() {
     setHistory(newHistory);
     persist({ mps, history: newHistory });
     flash('ok', `Cierre ${period} eliminado`);
+    traza(`Eliminó cierre histórico ${period}`);
   };
 
   return (
@@ -112,6 +195,9 @@ export default function Compras() {
         subtitle="Costo estándar & comparativo Std vs Real · Variaciones de precio"
         actions={
           <>
+            <span className={`auth-pill ${authorized ? 'auth-pill-on' : 'auth-pill-off'}`}>
+              {authorized ? '● AUTORIZADO' : '○ SOLO LECTURA'}
+            </span>
             <button className="btn" onClick={() => setShowAdd(true)}>+ Materia Prima</button>
             <button className="btn" onClick={() => setShowHist(true)}>
               Histórico {history.length > 0 ? `(${history.length})` : ''}
@@ -123,6 +209,83 @@ export default function Compras() {
           </>
         }
       />
+
+      <Panel
+        title="Explosionado de MP con base en Programa de Producción"
+        meta="Datos de Ingeniería · Click en celda para ver desglose de compra"
+        scrollX
+      >
+        <table className="cost-table">
+          <thead>
+            <tr>
+              <th style={{ width: 60 }}>CÓD</th>
+              <th>PRODUCTO</th>
+              <th className="num" style={{ width: 110 }}>$ MP / U</th>
+              {MONTHS.map((m) => <th key={m} className="num">{m}</th>)}
+              <th className="num" style={{ background: '#0a0a0a', color: '#fff' }}>TOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ingSchedule.map((p) => {
+              const product = ingProducts.find((x) => x.code === p.code);
+              const mpUnit = product
+                ? product.bom.reduce((s, r) => s + r.consumo * mpCost(r.code), 0)
+                : 0;
+              const monthly = p.months.map((n) => n * mpUnit);
+              const total = monthly.reduce((s, n) => s + n, 0);
+              return (
+                <tr key={p.code}>
+                  <td>{p.code}</td>
+                  <td>{p.name}</td>
+                  <td className="cell-master num">${fmtMoney(mpUnit)}</td>
+                  {monthly.map((v, i) => (
+                    <td
+                      key={i}
+                      className={`cell-formula num${v > 0 ? ' cell-clickable' : ''}`}
+                      onClick={v > 0 ? () => setMpBreakdown({ productCode: p.code, monthIdx: i }) : undefined}
+                    >
+                      {v > 0 ? `$${fmtMoneyNoDec(v)}` : '—'}
+                    </td>
+                  ))}
+                  <td className="cell-formula num"><b>{total > 0 ? `$${fmtMoneyNoDec(total)}` : '—'}</b></td>
+                </tr>
+              );
+            })}
+            <tr className="row-total">
+              <td colSpan={3} style={{
+                textAlign: 'right',
+                fontFamily: "'IBM Plex Sans'",
+                textTransform: 'uppercase',
+                fontSize: 10,
+                letterSpacing: '0.08em',
+              }}>
+                TOTAL MP / MES
+              </td>
+              {MONTHS.map((_, i) => {
+                const sum = ingSchedule.reduce((s, p) => {
+                  const product = ingProducts.find((x) => x.code === p.code);
+                  const mpUnit = product
+                    ? product.bom.reduce((a, r) => a + r.consumo * mpCost(r.code), 0)
+                    : 0;
+                  return s + p.months[i] * mpUnit;
+                }, 0);
+                return <td key={i} className="num">{sum > 0 ? `$${fmtMoneyNoDec(sum)}` : '—'}</td>;
+              })}
+              <td className="num" style={{ background: '#0a0a0a', color: '#fff' }}>
+                ${fmtMoneyNoDec(
+                  ingSchedule.reduce((s, p) => {
+                    const product = ingProducts.find((x) => x.code === p.code);
+                    const mpUnit = product
+                      ? product.bom.reduce((a, r) => a + r.consumo * mpCost(r.code), 0)
+                      : 0;
+                    return s + p.months.reduce((a, n) => a + n * mpUnit, 0);
+                  }, 0)
+                )}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </Panel>
 
       <Panel
         title="Costo Estándar de Materias Primas · Puesto en Planta"
@@ -153,22 +316,24 @@ export default function Compras() {
                   <td className="mp-code">{m.code}</td>
                   <td>{m.name}</td>
                   <td className="center">{m.um}</td>
-                  <td className="cell-input num">
+                  <td className="cell-input num" {...guardProps}>
                     <input
                       type="number"
                       step="0.01"
                       value={m.costStd}
                       onChange={(e) => update(i, 'costStd', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => { e.target.select(); focusCell(m.costStd, `Costo Std ${m.name}`); }}
+                      onBlur={(e) => blurCell(parseFloat(e.target.value) || 0)}
                     />
                   </td>
-                  <td className="cell-input num">
+                  <td className="cell-input num" {...guardProps}>
                     <input
                       type="number"
                       step="0.01"
                       value={m.costReal}
                       onChange={(e) => update(i, 'costReal', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => { e.target.select(); focusCell(m.costReal, `Costo Real ${m.name}`); }}
+                      onBlur={(e) => blurCell(parseFloat(e.target.value) || 0)}
                     />
                   </td>
                   <td className={`cell-formula num ${cls}`}>
@@ -246,7 +411,215 @@ export default function Compras() {
           onDelete={handleDeleteHistory}
         />
       )}
+
+      {mpBreakdown && (() => {
+        const prod = ingProducts.find((p) => p.code === mpBreakdown.productCode);
+        const sched = ingSchedule.find((s) => s.code === mpBreakdown.productCode);
+        if (!prod || !sched) return null;
+        const volume = sched.months[mpBreakdown.monthIdx] || 0;
+        return (
+          <MpBreakdownModal
+            product={prod}
+            volume={volume}
+            month={MONTHS[mpBreakdown.monthIdx]}
+            onClose={() => setMpBreakdown(null)}
+          />
+        );
+      })()}
+
+      {showAuthModal && (
+        <AuthModal
+          onAuthorize={handleAuthorize}
+          onClose={() => setShowAuthModal(false)}
+        />
+      )}
     </>
+  );
+}
+
+function AuthModal({ onAuthorize, onClose }) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (password === '12345') {
+      onAuthorize(password);
+      return;
+    }
+    setError('Password incorrecto');
+    setPassword('');
+    inputRef.current?.focus();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal auth-modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px, 100%)' }}>
+        <div className="modal-header">
+          <h3>Autorización requerida</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Cerrar">×</button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body" style={{ padding: '24px 22px' }}>
+            <div className="auth-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+            </div>
+            <p style={{ fontFamily: "'IBM Plex Serif'", fontSize: 14, lineHeight: 1.5, margin: '14px 0 6px', color: 'var(--ink)' }}>
+              Estás por alterar los <strong>estándares autorizados</strong>. Revisa tus permisos.
+            </p>
+            <p style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.05em', color: 'var(--ink-mute)', textTransform: 'uppercase' }}>
+              Solo personal con permiso de Compras puede modificar costos estándar y reales del maestro de materias primas.
+            </p>
+            <label className="form-field auth-password" style={{ marginTop: 18, textAlign: 'left' }}>
+              <span>INGRESA TU PASSWORD</span>
+              <input
+                ref={inputRef}
+                type="password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); if (error) setError(''); }}
+                placeholder="••••••"
+                autoComplete="off"
+              />
+            </label>
+            {error && (
+              <div style={{
+                color: 'var(--neg)', fontFamily: "'IBM Plex Mono'", fontSize: 11,
+                textAlign: 'left', marginTop: 8,
+              }}>
+                {error}
+              </div>
+            )}
+          </div>
+          <div style={{
+            padding: '12px 20px',
+            borderTop: '1px solid var(--line)',
+            display: 'flex', justifyContent: 'flex-end', gap: 8,
+            background: 'var(--panel-alt)',
+          }}>
+            <button type="button" className="btn" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary">Autorizado</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function MpBreakdownModal({ product, volume, month, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const rows = product.bom.map((mp) => {
+    const costo = mpCost(mp.code);
+    const unidades = mp.consumo * volume;
+    const total = unidades * costo;
+    return { ...mp, costo, unidades, total };
+  });
+  const totalUnidades = rows.reduce((s, r) => s + r.unidades, 0);
+  const totalMonto = rows.reduce((s, r) => s + r.total, 0);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(900px, 100%)', maxHeight: '92vh' }}>
+        <div className="modal-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h3>Compra de Materia Prima</h3>
+            <span className="explosionado-tag">
+              {product.name} · {month} · {fmtUnits(volume)} U
+            </span>
+          </div>
+          <button className="modal-close" onClick={onClose} aria-label="Cerrar">×</button>
+        </div>
+        <div className="modal-body" style={{ overflowY: 'auto' }}>
+          <div className="scroll-x">
+            <table className="cost-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 60 }}>CÓD</th>
+                  <th>MATERIA PRIMA</th>
+                  <th className="center" style={{ width: 60 }}>UM</th>
+                  <th className="num" style={{ width: 100 }}>CONSUMO / U</th>
+                  <th className="num" style={{ width: 110 }}>UNIDADES</th>
+                  <th className="num" style={{ width: 90 }}>COSTO</th>
+                  <th className="num" style={{ width: 130 }}>TOTAL $</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.code}>
+                    <td className="mp-code">{r.code}</td>
+                    <td>{r.name}</td>
+                    <td className="center">{r.um}</td>
+                    <td className="num">{fmtMoney(r.consumo, 4)}</td>
+                    <td className="cell-formula num">{fmtMoneyNoDec(r.unidades)}</td>
+                    <td className="cell-master num">{fmtMoney(r.costo)}</td>
+                    <td className="cell-formula num">${fmtMoneyNoDec(r.total)}</td>
+                  </tr>
+                ))}
+                <tr className="row-total">
+                  <td colSpan={4} style={{
+                    textAlign: 'right',
+                    fontFamily: "'IBM Plex Sans'",
+                    textTransform: 'uppercase',
+                    fontSize: 10,
+                    letterSpacing: '0.08em',
+                  }}>
+                    TOTAL COMPRA
+                  </td>
+                  <td className="num"><b>{fmtMoneyNoDec(totalUnidades)}</b></td>
+                  <td></td>
+                  <td className="num" style={{
+                    fontFamily: "'IBM Plex Mono'",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: 'var(--gold)',
+                  }}>
+                    ${fmtMoneyNoDec(totalMonto)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{
+            margin: '14px 20px 0', padding: '12px 14px',
+            background: 'var(--panel-alt)', border: '1px solid var(--line)',
+            fontFamily: "'IBM Plex Serif'", fontSize: 12,
+            color: 'var(--ink-soft)', fontStyle: 'italic',
+          }}>
+            <strong style={{
+              color: 'var(--accent)', fontStyle: 'normal',
+              fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em',
+            }}>LECTURA</strong>
+            &nbsp; Para producir {fmtUnits(volume)} unidades de {product.name} en {month} se requiere comprar el material listado arriba.
+          </div>
+        </div>
+        <div style={{
+          padding: '12px 20px',
+          borderTop: '1px solid var(--line)',
+          display: 'flex', justifyContent: 'flex-end', gap: 8,
+          background: 'var(--panel-alt)',
+        }}>
+          <button type="button" className="btn btn-primary" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
