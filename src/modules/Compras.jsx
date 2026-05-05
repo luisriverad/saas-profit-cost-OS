@@ -13,6 +13,50 @@ import { logTraza } from '../utils/trazabilidad';
 
 const STORAGE_KEY = 'compras.workspace.v1';
 const ING_STORAGE_KEY = 'ingenieria.workspace.v2';
+const VR_PERIOD_KEY = 'ventaReal.periodIdx';
+const VR_PERIODS = ['ENERO 2026', 'FEBRERO 2026', 'MARZO 2026', 'ABRIL 2026'];
+const PR_STORAGE_KEY = 'prodReal.workspace.v2';
+
+const readVrPeriodIdx = () => {
+  try {
+    const raw = window.localStorage.getItem(VR_PERIOD_KEY);
+    if (raw === null) return 0;
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n) || n < 0 || n >= VR_PERIODS.length) return 0;
+    return n;
+  } catch { return 0; }
+};
+const readPrSnapshot = (idx) => {
+  try {
+    const raw = window.localStorage.getItem(PR_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data?.matrix?.[idx] ?? null;
+  } catch { return null; }
+};
+
+// Default real MP values for Jan, scaled per month for non-stored data
+const PR_DEFAULT_REAL_MP_JAN = {
+  1001: 7313250, 1002: 1896221.25, 1003: 383353.6, 1004: 5020372,
+  1005: 636984.075, 1006: 895977.6, 1007: 144036.2, 1008: 1813686,
+  1009: 966000, 1010: 679000,
+};
+const PR_FACTORS = [0.94, 0.98, 1.04, 0.99];
+const buildDefaultRealMp = (idx) => {
+  const f = PR_FACTORS[idx] ?? 1;
+  const out = {};
+  Object.entries(PR_DEFAULT_REAL_MP_JAN).forEach(([k, v]) => { out[k] = Math.round(v * f); });
+  return out;
+};
+const buildDefaultKgs = (idx, products, schedule) => {
+  const f = PR_FACTORS[idx] ?? 1;
+  const out = {};
+  products.forEach((p) => {
+    const sch = schedule.find((s) => s.code === p.code);
+    out[p.code] = Math.round((sch?.months[idx] ?? 0) * f);
+  });
+  return out;
+};
 
 const MP_COSTS = {
   1001: 100, 1002: 55, 1003: 20, 1004: 34, 1005: 15,
@@ -68,6 +112,30 @@ export default function Compras() {
 
   const ingProducts = ingStored?.products ?? ING_BASE_PRODUCTS;
   const ingSchedule = ingStored?.schedule ?? PRODUCTION_SCHEDULE;
+  const vrPeriodIdx = readVrPeriodIdx();
+  const vrPeriod = VR_PERIODS[vrPeriodIdx];
+
+  // Compute month-specific MP variations from ProdReal storage (or defaults)
+  const monthSnapshot = readPrSnapshot(vrPeriodIdx) ?? {
+    kgs: buildDefaultKgs(vrPeriodIdx, ingProducts, ingSchedule),
+    realMp: buildDefaultRealMp(vrPeriodIdx),
+  };
+  const monthVariations = Object.keys(MP_COSTS).map((codeStr) => {
+    const code = parseInt(codeStr, 10);
+    const cost = MP_COSTS[code] ?? 0;
+    let consumo = 0;
+    ingProducts.forEach((p) => {
+      const kgs = monthSnapshot.kgs?.[p.code] ?? 0;
+      const bomRow = p.bom.find((b) => b.code === code);
+      if (bomRow) consumo += kgs * bomRow.consumo;
+    });
+    const std = consumo * cost;
+    const real = monthSnapshot.realMp?.[code] ?? 0;
+    const varT = real - std;
+    const name = ingProducts[0]?.bom?.find((b) => b.code === code)?.name ?? `MP ${code}`;
+    const um = ingProducts[0]?.bom?.find((b) => b.code === code)?.um ?? 'KGS';
+    return { code, name, um, consumo, std, real, varT, varU: cost ? (varT / consumo) : 0 };
+  });
 
   const guardProps = authorized
     ? {}
@@ -356,8 +424,8 @@ export default function Compras() {
       </Panel>
 
       <Panel
-        title="Variaciones Mensuales · Std vs Real"
-        meta="Impacto monetario sobre el costo de ventas"
+        title={`Variaciones Mensuales · Std vs Real · ${vrPeriod}`}
+        meta={`Impacto monetario sobre el costo de ventas · Periodo activo: ${vrPeriod}`}
         scrollX
       >
         <table className="cost-table">
@@ -365,7 +433,7 @@ export default function Compras() {
             <tr>
               <th>MP</th>
               <th>DESCRIPCIÓN</th>
-              <th className="num">CONSUMO REAL</th>
+              <th className="num">COMPRADOS</th>
               <th className="num">$ STD</th>
               <th className="num">$ REAL</th>
               <th className="num">VAR PRECIO</th>
@@ -373,14 +441,14 @@ export default function Compras() {
             </tr>
           </thead>
           <tbody>
-            {VARIATIONS.map((v) => {
+            {monthVariations.map((v) => {
               const cls = v.varT > 0 ? 'neg-num' : v.varT < 0 ? 'pos-num' : '';
               const sign = v.varT > 0 ? '+' : v.varT < 0 ? '−' : '';
               return (
                 <tr key={v.code}>
                   <td className="mp-code">{v.code}</td>
                   <td>{v.name}</td>
-                  <td className="cell-master num">{fmtUnits(v.consumo)}</td>
+                  <td className="cell-master num">{fmtUnits(Math.round(v.consumo))}</td>
                   <td className="cell-formula num">${fmtMoneyNoDec(v.std)}</td>
                   <td className="cell-formula num">${fmtMoneyNoDec(v.real)}</td>
                   <td className={`cell-formula num ${cls}`}>

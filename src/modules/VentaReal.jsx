@@ -52,6 +52,60 @@ const PERIODS = [
   shiftSnapshot(VENTA_REAL, 'MARZO 2026',   1.02, 1.005),
   shiftSnapshot(VENTA_REAL, 'ABRIL 2026',   0.98, 1.015),
 ];
+const ACUMULADO_IDX = 4;
+
+function buildAcumuladoPeriod() {
+  // Sum rows across all 4 periods by product code
+  const map = new Map();
+  PERIODS.forEach((p) => {
+    p.rows.forEach((r) => {
+      const cur = map.get(r.code);
+      if (!cur) {
+        map.set(r.code, { ...r });
+      } else {
+        cur.kgs         += r.kgs;
+        cur.ventaBruta  += r.ventaBruta;
+        cur.descuentos  += r.descuentos;
+        cur.ventaNeta   += r.ventaNeta;
+        cur.fctsKgs     += r.fctsKgs;
+        cur.varKgs      += r.varKgs;
+        cur.fctsVentas  += r.fctsVentas;
+        cur.varVentas   += r.varVentas;
+        cur.xVolumen    += r.xVolumen;
+        cur.xPrecio     += r.xPrecio;
+        // Recompute weighted average price
+        cur.precio = cur.kgs > 0 ? +(cur.ventaBruta / cur.kgs).toFixed(4) : 0;
+      }
+    });
+  });
+  const rows = [...map.values()].map((r) => ({
+    ...r,
+    ventaBruta: +r.ventaBruta.toFixed(2),
+    descuentos: +r.descuentos.toFixed(2),
+    ventaNeta: +r.ventaNeta.toFixed(2),
+    fctsVentas: +r.fctsVentas.toFixed(2),
+    varVentas: +r.varVentas.toFixed(2),
+    xVolumen: +r.xVolumen.toFixed(2),
+    xPrecio: +r.xPrecio.toFixed(2),
+  }));
+  const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
+  const totals = {
+    kgs: sum('kgs'),
+    ventaBruta: +sum('ventaBruta').toFixed(2),
+    descuentos: +sum('descuentos').toFixed(2),
+    ventaNeta: +sum('ventaNeta').toFixed(2),
+    fctsKgs: sum('fctsKgs'),
+    varKgs: sum('varKgs'),
+    fctsVentas: +sum('fctsVentas').toFixed(2),
+    varVentas: +sum('varVentas').toFixed(2),
+    xVolumen: +sum('xVolumen').toFixed(2),
+    xPrecio: +sum('xPrecio').toFixed(2),
+  };
+  const impacto = { volumen: totals.xVolumen, precio: totals.xPrecio, neto: totals.varVentas };
+  return { period: 'ACUMULADO', rows, totals, impacto };
+}
+
+const ALL_PERIODS_WITH_ACUM = [...PERIODS, buildAcumuladoPeriod()];
 
 const csvEscape = (v) => {
   if (v === null || v === undefined) return '';
@@ -60,6 +114,23 @@ const csvEscape = (v) => {
 };
 
 const PERIOD_KEY = 'ventaReal.periodIdx';
+const PCTS_KEY = 'ventaReal.pcts.v1';
+
+const readStoredPcts = () => {
+  try {
+    const raw = window.localStorage.getItem(PCTS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+};
+const persistPcts = (data) => {
+  try { window.localStorage.setItem(PCTS_KEY, JSON.stringify(data)); } catch {}
+};
+
+const fmtPctSigned = (n) => {
+  if (n === 0 || n === null || n === undefined || Number.isNaN(n)) return '0.00%';
+  const sign = n > 0 ? '+' : '−';
+  return `${sign}${Math.abs(n).toFixed(2)}%`;
+};
 
 const readStoredPeriodIdx = () => {
   try {
@@ -74,15 +145,11 @@ const readStoredPeriodIdx = () => {
 };
 
 export default function VentaReal() {
-  const [periodIdx, setPeriodIdxState] = useState(readStoredPeriodIdx);
+  const [periodIdx] = useState(readStoredPeriodIdx);
   const [showCompare, setShowCompare] = useState(false);
   const [status, setStatus] = useState(null);
+  const [pcts, setPcts] = useState(readStoredPcts);
   const timerRef = useRef(null);
-
-  const setPeriodIdx = (n) => {
-    setPeriodIdxState(n);
-    try { window.localStorage.setItem(PERIOD_KEY, String(n)); } catch {}
-  };
 
   const flash = (kind, text, ms = 2400) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -98,14 +165,47 @@ export default function VentaReal() {
     return () => window.removeEventListener('keydown', onKey);
   }, [showCompare]);
 
-  const active = PERIODS[periodIdx];
+  const active = ALL_PERIODS_WITH_ACUM[periodIdx] ?? ALL_PERIODS_WITH_ACUM[0];
   const { rows, totals, impacto, period } = active;
 
-  const handleSelectMes = (e) => {
-    const next = parseInt(e.target.value, 10);
-    if (Number.isNaN(next)) return;
-    setPeriodIdx(next);
-    flash('ok', `Mostrando ${PERIODS[next].period}`);
+  // Manual % per row+field. Default = calculated % of fctsVentas. User can override.
+  const getCalcPct = (row, field) => {
+    if (!row.fctsVentas || row.fctsVentas === 0) return 0;
+    return (row[field] / row.fctsVentas) * 100;
+  };
+  const getPct = (productCode, field, calculated) => {
+    const stored = pcts?.[periodIdx]?.[productCode]?.[field];
+    return stored !== undefined && stored !== null ? stored : calculated;
+  };
+  const updatePct = (productCode, field, raw) => {
+    const num = parseFloat(String(raw).replace(/[^\d.\-]/g, '')) || 0;
+    setPcts((prev) => {
+      const next = { ...prev };
+      if (!next[periodIdx]) next[periodIdx] = {};
+      if (!next[periodIdx][productCode]) next[periodIdx][productCode] = {};
+      next[periodIdx][productCode] = { ...next[periodIdx][productCode], [field]: num };
+      persistPcts(next);
+      return next;
+    });
+  };
+  const getTotalCalcPct = (field) => {
+    if (!totals.fctsVentas || totals.fctsVentas === 0) return 0;
+    return (totals[field] / totals.fctsVentas) * 100;
+  };
+  const getTotalPct = (field, calculated) => {
+    const stored = pcts?.[periodIdx]?.['__TOTAL__']?.[field];
+    return stored !== undefined && stored !== null ? stored : calculated;
+  };
+  const updateTotalPct = (field, raw) => {
+    const num = parseFloat(String(raw).replace(/[^\d.\-]/g, '')) || 0;
+    setPcts((prev) => {
+      const next = { ...prev };
+      if (!next[periodIdx]) next[periodIdx] = {};
+      if (!next[periodIdx]['__TOTAL__']) next[periodIdx]['__TOTAL__'] = {};
+      next[periodIdx]['__TOTAL__'] = { ...next[periodIdx]['__TOTAL__'], [field]: num };
+      persistPcts(next);
+      return next;
+    });
   };
 
   const handleCompararForecast = () => setShowCompare(true);
@@ -143,18 +243,10 @@ export default function VentaReal() {
         subtitle="Real vs Forecast · descomposición de variación por volumen y precio"
         actions={
           <>
-            <label className="month-picker">
-              <span className="month-picker-label">RESULTADO DEL MES</span>
-              <select
-                className="month-picker-select"
-                value={periodIdx}
-                onChange={handleSelectMes}
-              >
-                {PERIODS.map((p, i) => (
-                  <option key={p.period} value={i}>{p.period}</option>
-                ))}
-              </select>
-            </label>
+            <span className="period-pill">
+              <span className="period-pill-label">PERIODO</span>
+              <span className="period-pill-value">{period}</span>
+            </span>
             <button className="btn" onClick={handleCompararForecast}>Comparar Forecast</button>
             <button className="btn btn-primary" onClick={handleExportar}>Exportar</button>
             {status && (
@@ -232,14 +324,29 @@ export default function VentaReal() {
                   {fmtMoneySigned(r.varKgs)}
                 </td>
                 <td className="num fcts-col">${fmtMoneyNoDec(r.fctsVentas)}</td>
-                <td className="num" style={{ color: r.varVentas > 0 ? 'var(--pos)' : r.varVentas < 0 ? 'var(--neg)' : 'var(--ink-mute)' }}>
-                  {fmtMoneySigned(r.varVentas)}
+                <td className="cell-input num">
+                  <input
+                    type="text"
+                    value={fmtPctSigned(getPct(r.code, 'varVentas', getCalcPct(r, 'varVentas')))}
+                    onChange={(e) => updatePct(r.code, 'varVentas', e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                  />
                 </td>
-                <td className="num" style={{ color: r.xVolumen > 0 ? 'var(--pos)' : r.xVolumen < 0 ? 'var(--neg)' : 'var(--ink-mute)' }}>
-                  {fmtMoneySigned(r.xVolumen)}
+                <td className="cell-input num">
+                  <input
+                    type="text"
+                    value={fmtPctSigned(getPct(r.code, 'xVolumen', getCalcPct(r, 'xVolumen')))}
+                    onChange={(e) => updatePct(r.code, 'xVolumen', e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                  />
                 </td>
-                <td className="num" style={{ color: r.xPrecio > 0 ? 'var(--pos)' : r.xPrecio < 0 ? 'var(--neg)' : 'var(--ink-mute)' }}>
-                  {r.xPrecio === 0 ? '—' : fmtMoneySigned(r.xPrecio)}
+                <td className="cell-input num">
+                  <input
+                    type="text"
+                    value={fmtPctSigned(getPct(r.code, 'xPrecio', getCalcPct(r, 'xPrecio')))}
+                    onChange={(e) => updatePct(r.code, 'xPrecio', e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                  />
                 </td>
               </tr>
             ))}
@@ -254,9 +361,30 @@ export default function VentaReal() {
               <td className="num fcts-col"><b>{fmtUnits(totals.fctsKgs)}</b></td>
               <td className="num" style={{ color: totals.varKgs >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.varKgs)}</b></td>
               <td className="num fcts-col"><b>${fmtMoneyNoDec(totals.fctsVentas)}</b></td>
-              <td className="num" style={{ color: totals.varVentas >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.varVentas)}</b></td>
-              <td className="num" style={{ color: totals.xVolumen >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.xVolumen)}</b></td>
-              <td className="num" style={{ color: totals.xPrecio >= 0 ? 'var(--pos)' : 'var(--neg)' }}><b>{fmtMoneySigned(totals.xPrecio)}</b></td>
+              <td className="cell-input num">
+                <input
+                  type="text"
+                  value={fmtPctSigned(getTotalPct('varVentas', getTotalCalcPct('varVentas')))}
+                  onChange={(e) => updateTotalPct('varVentas', e.target.value)}
+                  onFocus={(e) => e.target.select()}
+                />
+              </td>
+              <td className="cell-input num">
+                <input
+                  type="text"
+                  value={fmtPctSigned(getTotalPct('xVolumen', getTotalCalcPct('xVolumen')))}
+                  onChange={(e) => updateTotalPct('xVolumen', e.target.value)}
+                  onFocus={(e) => e.target.select()}
+                />
+              </td>
+              <td className="cell-input num">
+                <input
+                  type="text"
+                  value={fmtPctSigned(getTotalPct('xPrecio', getTotalCalcPct('xPrecio')))}
+                  onChange={(e) => updateTotalPct('xPrecio', e.target.value)}
+                  onFocus={(e) => e.target.select()}
+                />
+              </td>
             </tr>
           </tbody>
         </table>

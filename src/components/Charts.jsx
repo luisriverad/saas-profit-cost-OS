@@ -202,7 +202,7 @@ export function MarginChart({ bruto, operativo, height = 280 }) {
 // -----------------------------------------------------
 // Barras divergentes: Variaciones de MP
 // -----------------------------------------------------
-export function VarianceBars({ data, height, width = 560, onSelect }) {
+export function VarianceBars({ data, height, width = 560, onSelect, onItemClick }) {
   const rowH = 30;
   const padT = 14, padB = 22;
   const H = height ?? padT + padB + data.length * rowH;
@@ -265,9 +265,14 @@ export function VarianceBars({ data, height, width = 560, onSelect }) {
           textColor = isNeg ? COLORS.pos : COLORS.neg;
         }
 
-        const clickable = onSelect && !isZero;
+        const clickable = (onSelect || onItemClick) && !isZero;
         const side = isNeg ? 'favorable' : 'desfavorable';
-        const handleClick = clickable ? () => onSelect(side) : undefined;
+        const handleClick = clickable
+          ? () => {
+              if (onItemClick) onItemClick({ ...d, side });
+              else if (onSelect) onSelect(side);
+            }
+          : undefined;
         const groupStyle = clickable ? { cursor: 'pointer' } : undefined;
 
         return (

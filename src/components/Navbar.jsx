@@ -1,14 +1,15 @@
 const TABS = [
   { id: 'general',       num: '00', label: 'Dashboard General' },
-  { id: 'dashboard',     num: '01', label: 'Presupuesto 2026'  },
-  { id: 'ventaReal',     num: '02', label: 'Venta Real'        },
-  { id: 'ingenieria',    num: '03', label: 'Ingeniería'        },
-  { id: 'compras',       num: '04', label: 'Compras'           },
-  { id: 'rh',            num: '05', label: 'Rec. Humanos'      },
-  { id: 'contabilidad',  num: '06', label: 'Contabilidad'      },
-  { id: 'cuotas',        num: '07', label: 'Cuotas/Min'        },
-  { id: 'costeo',        num: '08', label: 'Hojas de Costeo'   },
-  { id: 'pnl',           num: '09', label: 'P&L Forecast'      },
+  { id: 'ventaReal',     num: '01', label: 'Venta Real'        },
+  { id: 'prodReal',      num: '02', label: 'Prod Real'         },
+  { id: 'dashboard',     num: '03', label: 'Presupuesto 2026'  },
+  { id: 'ingenieria',    num: '04', label: 'Ingeniería'        },
+  { id: 'compras',       num: '05', label: 'Compras'           },
+  { id: 'rh',            num: '06', label: 'Rec. Humanos'      },
+  { id: 'contabilidad',  num: '07', label: 'Contabilidad'      },
+  { id: 'cuotas',        num: '08', label: 'Cuotas/Min'        },
+  { id: 'costeo',        num: '09', label: 'Hojas de Costeo'   },
+  { id: 'pnl',           num: '10', label: 'P&L Forecast'      },
 ];
 
 const RIGHT_TABS = [

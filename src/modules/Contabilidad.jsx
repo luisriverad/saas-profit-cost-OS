@@ -2,6 +2,8 @@ import { useState } from 'react';
 import PageHeader from '../components/PageHeader';
 import Panel from '../components/Panel';
 import { COST_CENTERS, ACCOUNTS, MONTHS } from '../data/seed';
+import { COSTOS_CALC_ROWS } from '../data/costosCalc';
+import { fmtMoney } from '../utils/format';
 
 const CAT_CLASS = {
   PRODUCTIVOS:    'productivos',
@@ -215,6 +217,8 @@ export default function Contabilidad() {
         </Panel>
       )}
 
+      <CostosCalcPanel />
+
       {showAddCC && (
         <div className="modal-overlay" onClick={() => setShowAddCC(false)}>
           <div className="modal" style={{ width: 'min(480px, 100%)' }} onClick={(e) => e.stopPropagation()}>
@@ -365,5 +369,208 @@ export default function Contabilidad() {
         </div>
       )}
     </>
+  );
+}
+
+// ============================================================
+// COSTOS (Cálculo) — réplica íntegra de la pestaña del Excel
+// ============================================================
+const CC_MONTHS = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
+
+function fmtCell(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number') {
+    if (v === 0) return '—';
+    return fmtMoney(v, Math.abs(v) < 10 ? 4 : 2);
+  }
+  return String(v);
+}
+
+function classifyRow(r) {
+  // Section header: descCc null, no cuenta, has clas like 'GASTO TOTAL PLANTA', 'PRORRATEO...', etc.
+  // Subtotal: descCc === 'TOTALES'
+  // Total summary: clas in special words (e.g., 'ABSORCIONES POR PRODUCCION', 'GASTO PROYECTADO', 'VARIACIONES', 'MOD REAL', 'GTOS V', 'GTOS F', 'ABSORCION', 'VAR', 'MANO DE OBRA DIRECTA', 'GASTOS VARIABLES', 'GASTOS FIJOS', 'TOTALES')
+  if (r.descCc === 'TOTALES') return 'subtotal';
+  const sectionHeaders = ['GASTO TOTAL PLANTA', 'PRORRATEO DE CENTRO DE COSTOS DE SERVICIOS A PRODUCTIVOS'];
+  if (r.clas && sectionHeaders.includes(r.clas) && !r.cuenta) return 'section';
+  const summaryWords = ['ABSORCIONES POR PRODUCCION', 'GASTO PROYECTADO', 'VARIACIONES', 'MOD REAL', 'GTOS V', 'GTOS F', 'ABSORCION', 'VAR'];
+  if (!r.cc && r.clas && summaryWords.includes(r.clas) && !r.cuenta) return 'summary';
+  if (!r.cc && !r.cuenta && r.clas && ['MANO DE OBRA DIRECTA','GASTOS VARIABLES','GASTOS FIJOS','TOTALES'].includes(r.clas)) {
+    return 'plantSubtotal';
+  }
+  if (!r.cc && r.descCuenta === 'TOTAL GASTO') return 'plantSubtotal';
+  return 'detail';
+}
+
+// Cuentas que en el Excel vienen en amarillo (captura manual): todas las GASTOS VARIABLES
+const MANUAL_CUENTA_PREFIXES = ['1002'];
+const isManualCuenta = (cuenta) => {
+  if (!cuenta) return false;
+  const s = String(cuenta);
+  return MANUAL_CUENTA_PREFIXES.some((p) => s.startsWith(p));
+};
+
+// Renglones del PRORRATEO de CCs servicios → productivos (porcentajes manuales)
+const isProrrateoRow = (r) => {
+  if (r.cc) return false;
+  if (!r.clas || !/^\d+$/.test(String(r.clas))) return false;
+  if (!r.cuenta) return false;
+  return String(r.cuenta).startsWith('PROCESO CONVERSION');
+};
+
+const fmtPct = (v) => {
+  if (v === null || v === undefined || v === '' || Number.isNaN(v)) return '';
+  return `${(Number(v) * 100).toFixed(2)}%`;
+};
+const parsePct = (raw) => {
+  const cleaned = String(raw).replace(/[^\d.\-]/g, '');
+  if (!cleaned) return 0;
+  return parseFloat(cleaned) / 100;
+};
+
+const CC_MANUAL_KEY = 'contabilidad.costosCalcManual.v1';
+const readManualVals = () => {
+  try { return JSON.parse(window.localStorage.getItem(CC_MANUAL_KEY) || '{}'); }
+  catch { return {}; }
+};
+const persistManualVals = (data) => {
+  try { window.localStorage.setItem(CC_MANUAL_KEY, JSON.stringify(data)); } catch {}
+};
+
+function CostosCalcPanel() {
+  const [filterCc, setFilterCc] = useState('todos');
+  const [hideZeros, setHideZeros] = useState(false);
+  const [manualVals, setManualVals] = useState(readManualVals);
+
+  const visibleRows = COSTOS_CALC_ROWS.filter((r) => {
+    if (filterCc !== 'todos' && r.cc && String(r.cc) !== filterCc) {
+      return false;
+    }
+    if (hideZeros) {
+      const allZeroOrEmpty = r.months.every((m) => m === null || m === 0 || m === '') && (r.total === null || r.total === 0);
+      if (allZeroOrEmpty && classifyRow(r) === 'detail') return false;
+    }
+    return true;
+  });
+
+  const ccs = [...new Set(COSTOS_CALC_ROWS.map((r) => r.cc).filter((c) => c && /^\d+$/.test(String(c))))];
+
+  const cellKey = (rowR, monthIdx) => `${rowR}_${monthIdx}`;
+  const getCellValue = (r, monthIdx) => {
+    const stored = manualVals[cellKey(r.r, monthIdx)];
+    if (stored !== undefined && stored !== null) return stored;
+    return r.months[monthIdx];
+  };
+  const updateCell = (r, monthIdx, raw, asPct = false) => {
+    const num = asPct ? parsePct(raw) : (parseFloat(String(raw).replace(/[^\d.\-]/g, '')) || 0);
+    setManualVals((prev) => {
+      const next = { ...prev, [cellKey(r.r, monthIdx)]: num };
+      persistManualVals(next);
+      return next;
+    });
+  };
+  const getRowTotal = (r) => {
+    if (!isManualCuenta(r.cuenta) && !isProrrateoRow(r)) return r.total;
+    let s = 0;
+    for (let i = 0; i < 12; i++) {
+      const v = getCellValue(r, i);
+      if (typeof v === 'number') s += v;
+    }
+    if (isProrrateoRow(r)) return s / 12; // average across months for prorrateo display
+    return s;
+  };
+
+  return (
+    <Panel
+      title="COSTOS (Cálculo) · Replica íntegra del Excel"
+      meta={`${COSTOS_CALC_ROWS.length} renglones · Renglones azules = captura manual (Gastos Variables)`}
+      scrollX
+      actions={
+        <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+          <select
+            value={filterCc}
+            onChange={(e) => setFilterCc(e.target.value)}
+            style={{
+              padding: '6px 10px', border: '1px solid var(--line)', background: '#fff',
+              fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.06em',
+            }}
+          >
+            <option value="todos">TODOS LOS CC</option>
+            {ccs.map((c) => <option key={c} value={c}>CC {c}</option>)}
+          </select>
+          <label style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.06em', color: 'var(--ink-mute)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={hideZeros} onChange={(e) => setHideZeros(e.target.checked)} />
+            OCULTAR CEROS
+          </label>
+        </span>
+      }
+    >
+      <div className="scroll-x">
+        <table className="cost-table cc-table">
+          <thead>
+            <tr>
+              <th style={{ width: 50 }}>CC</th>
+              <th style={{ width: 180 }}>DESCRIPCIÓN CC</th>
+              <th style={{ width: 170 }}>CLASIFICACIÓN</th>
+              <th style={{ width: 80 }}>CUENTA</th>
+              <th style={{ width: 170 }}>DESCRIPCIÓN CUENTA</th>
+              {CC_MONTHS.map((m) => (
+                <th key={m} className="num" style={{ width: 90 }}>{m}</th>
+              ))}
+              <th className="num" style={{ width: 110, background: '#0a0a0a', color: '#fff' }}>TOTAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((r) => {
+              const type = classifyRow(r);
+              const rowClass = `cc-row-${type}`;
+              const manual = type === 'detail' && isManualCuenta(r.cuenta);
+              const prorrateo = isProrrateoRow(r);
+              const total = getRowTotal(r);
+              return (
+                <tr key={r.r} className={rowClass}>
+                  <td className="num">{r.cc ?? ''}</td>
+                  <td>{r.descCc ?? ''}</td>
+                  <td>{r.clas ?? ''}</td>
+                  <td className="num">{r.cuenta ?? ''}</td>
+                  <td>{r.descCuenta ?? ''}</td>
+                  {r.months.map((_, i) => {
+                    const v = getCellValue(r, i);
+                    if (manual) {
+                      return (
+                        <td key={i} className="cell-input num">
+                          <input
+                            type="text"
+                            value={typeof v === 'number' ? fmtMoney(v, Math.abs(v) < 10 ? 4 : 2) : ''}
+                            onChange={(e) => updateCell(r, i, e.target.value)}
+                            onFocus={(e) => e.target.select()}
+                          />
+                        </td>
+                      );
+                    }
+                    if (prorrateo) {
+                      return (
+                        <td key={i} className="cell-input num">
+                          <input
+                            type="text"
+                            value={typeof v === 'number' ? fmtPct(v) : ''}
+                            onChange={(e) => updateCell(r, i, e.target.value, true)}
+                            onFocus={(e) => e.target.select()}
+                          />
+                        </td>
+                      );
+                    }
+                    return <td key={i} className="num">{fmtCell(v)}</td>;
+                  })}
+                  <td className="num cc-total-cell">
+                    {prorrateo ? fmtPct(total) : fmtCell(total)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   );
 }

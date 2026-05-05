@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import PageHeader from '../components/PageHeader';
 import Panel from '../components/Panel';
 import { STAFF, BENEFITS, INTEGRATION_FACTOR, COST_CENTERS } from '../data/seed';
 import { fmtMoney } from '../utils/format';
+import { logTraza } from '../utils/trazabilidad';
 
 const PRODUCTIVE_CCS = COST_CENTERS.filter((c) => c.category === 'PRODUCTIVOS');
 
@@ -24,6 +25,55 @@ export default function RH() {
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const emptyDraft = { cc: PRODUCTIVE_CCS[0]?.cc ?? 100, name: '', puesto: 'MECANICO', sueldo: 315 };
   const [draftEmployee, setDraftEmployee] = useState(emptyDraft);
+
+  const [showAddBenefit, setShowAddBenefit] = useState(false);
+  const emptyBenefitDraft = { name: '', value: '', unit: 'pct' };
+  const [draftBenefit, setDraftBenefit] = useState(emptyBenefitDraft);
+
+  const [authorized, setAuthorized] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [activePassword, setActivePassword] = useState(null);
+  const editingRef = useRef(null);
+
+  const guardProps = authorized
+    ? {}
+    : {
+        onMouseDownCapture: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof e.currentTarget.blur === 'function') e.currentTarget.blur();
+          setShowAuthModal(true);
+        },
+        onFocusCapture: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (typeof e.target.blur === 'function') e.target.blur();
+          setShowAuthModal(true);
+        },
+      };
+
+  const handleAuthorize = (password) => {
+    setAuthorized(true);
+    setActivePassword(password);
+    setShowAuthModal(false);
+    logTraza({ password, module: 'Recursos Humanos', action: 'Autorización concedida' });
+  };
+
+  const traza = (action) => {
+    logTraza({ password: activePassword ?? '—', module: 'Recursos Humanos', action });
+  };
+
+  const focusCell = (oldValue, action) => {
+    editingRef.current = { value: oldValue, action };
+  };
+  const blurCell = (newValue) => {
+    const e = editingRef.current;
+    editingRef.current = null;
+    if (!e) return;
+    if (String(e.value) !== String(newValue)) {
+      traza(`${e.action}: ${e.value} → ${newValue}`);
+    }
+  };
 
   const adjustFactor = (delta) => {
     setFactor((f) => {
@@ -61,20 +111,41 @@ export default function RH() {
 
   const submitNewEmployee = () => {
     const name = draftEmployee.name.trim() || 'NUEVO EMPLEADO';
-    setStaff((s) => [
-      ...s,
-      {
-        cc: parseInt(draftEmployee.cc, 10) || PRODUCTIVE_CCS[0]?.cc || 100,
-        name: name.toUpperCase(),
-        puesto: (draftEmployee.puesto || 'MECANICO').toUpperCase(),
-        sueldo: parseFloat(draftEmployee.sueldo) || 0,
-      },
-    ]);
+    const cc = parseInt(draftEmployee.cc, 10) || PRODUCTIVE_CCS[0]?.cc || 100;
+    const puesto = (draftEmployee.puesto || 'MECANICO').toUpperCase();
+    const sueldo = parseFloat(draftEmployee.sueldo) || 0;
+    setStaff((s) => [...s, { cc, name: name.toUpperCase(), puesto, sueldo }]);
     setShowAddEmployee(false);
+    traza(`Empleado agregado · ${name.toUpperCase()} · ${puesto} · CC${cc} · $${sueldo}/día`);
   };
 
   const removeEmployee = (i) => {
+    const target = staff[i];
     setStaff((s) => s.filter((_, idx) => idx !== i));
+    if (target) traza(`Empleado eliminado · ${target.name} · ${target.puesto}`);
+  };
+
+  const openAddBenefit = () => {
+    setDraftBenefit(emptyBenefitDraft);
+    setShowAddBenefit(true);
+  };
+
+  const submitNewBenefit = () => {
+    const name = draftBenefit.name.trim();
+    if (!name) return;
+    if (benefits.some((b) => b.name.toLowerCase() === name.toLowerCase())) return;
+    const raw = parseFloat(String(draftBenefit.value).replace(',', '.')) || 0;
+    const value = draftBenefit.unit === 'pct' ? raw / 100 : raw;
+    setBenefits((list) => [...list, { name, value, unit: draftBenefit.unit }]);
+    setShowAddBenefit(false);
+    const display = draftBenefit.unit === 'pct' ? `${raw.toFixed(2)}%` : `${raw} ${draftBenefit.unit}`;
+    traza(`Prestación agregada · ${name} · ${display}`);
+  };
+
+  const removeBenefit = (i) => {
+    const target = benefits[i];
+    setBenefits((list) => list.filter((_, idx) => idx !== i));
+    if (target) traza(`Prestación eliminada · ${target.name}`);
   };
 
   const recalcIntegrado = () => {
@@ -97,7 +168,11 @@ export default function RH() {
         subtitle="Plantilla productiva · Sueldo integrado · Factor de prestaciones"
         actions={
           <>
+            <span className={`auth-pill ${authorized ? 'auth-pill-on' : 'auth-pill-off'}`}>
+              {authorized ? '● AUTORIZADO' : '○ SOLO LECTURA'}
+            </span>
             <button className="btn" onClick={openAddEmployee}>+ Empleado</button>
+            <button className="btn" onClick={openAddBenefit}>+ Prestación</button>
             <button className="btn" onClick={() => setShowPolicy(true)}>Política RH</button>
             <button className="btn btn-primary" onClick={recalcIntegrado}>
               {recalcFlash ? '✓ Recalculado' : 'Recalcular Integrado'}
@@ -126,10 +201,12 @@ export default function RH() {
             <tbody>
               {staff.map((s, i) => (
                 <tr key={i}>
-                  <td className="cell-input">
+                  <td className="cell-input" {...guardProps}>
                     <select
                       value={s.cc}
                       onChange={(e) => updateStaffField(i, 'cc', e.target.value)}
+                      onFocus={() => focusCell(s.cc, `CC de ${s.name}`)}
+                      onBlur={(e) => blurCell(e.target.value)}
                       style={{ width: '100%', background: 'transparent', border: 'none', font: 'inherit', color: 'inherit' }}
                     >
                       {PRODUCTIVE_CCS.map((c) => (
@@ -137,29 +214,32 @@ export default function RH() {
                       ))}
                     </select>
                   </td>
-                  <td className="cell-input">
+                  <td className="cell-input" {...guardProps}>
                     <input
                       type="text"
                       value={s.name}
                       onChange={(e) => updateStaffField(i, 'name', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => { e.target.select(); focusCell(s.name, `Nombre empleado fila ${i + 1}`); }}
+                      onBlur={(e) => blurCell(e.target.value)}
                     />
                   </td>
-                  <td className="cell-input">
+                  <td className="cell-input" {...guardProps}>
                     <input
                       type="text"
                       value={s.puesto}
                       onChange={(e) => updateStaffField(i, 'puesto', e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => { e.target.select(); focusCell(s.puesto, `Puesto de ${s.name}`); }}
+                      onBlur={(e) => blurCell(e.target.value)}
                     />
                   </td>
-                  <td className="cell-input num">
+                  <td className="cell-input num" {...guardProps}>
                     <input
                       type="number"
                       step="1"
                       value={s.sueldo}
                       onChange={(e) => updateSueldo(i, e.target.value)}
-                      onFocus={(e) => e.target.select()}
+                      onFocus={(e) => { e.target.select(); focusCell(s.sueldo, `Sueldo de ${s.name}`); }}
+                      onBlur={(e) => blurCell(parseFloat(e.target.value) || 0)}
                     />
                   </td>
                   <td className="cell-formula num">
@@ -283,15 +363,33 @@ export default function RH() {
                 {benefits.map((b, i) => (
                   <tr key={b.name}>
                     <td>{b.name}</td>
-                    <td className="cell-input num">
+                    <td className="cell-input num" {...guardProps}>
                       <input
                         type="text"
                         defaultValue={b.unit === 'pct' ? `${(b.value * 100).toFixed(2)}%` : b.value}
                         onChange={(e) => updateBenefit(i, e.target.value.replace('%', ''))}
-                        onFocus={(e) => e.target.select()}
+                        onFocus={(e) => { e.target.select(); focusCell(b.unit === 'pct' ? `${(b.value * 100).toFixed(2)}%` : b.value, `Prestación ${b.name}`); }}
+                        onBlur={(e) => blurCell(e.target.value)}
                       />
                     </td>
                     <td>{b.unit === 'pct' ? '—' : b.unit}</td>
+                    <td style={{ width: 32 }}>
+                      <button
+                        type="button"
+                        onClick={() => removeBenefit(i)}
+                        aria-label="Eliminar prestación"
+                        title="Eliminar prestación"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--ink-mute)',
+                          cursor: 'pointer',
+                          fontFamily: "'IBM Plex Mono'",
+                          fontSize: 14,
+                          padding: '2px 6px',
+                        }}
+                      >✕</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -373,6 +471,73 @@ export default function RH() {
             </div>
           </div>
         </div>
+      )}
+
+      {showAddBenefit && (
+        <div className="modal-overlay" onClick={() => setShowAddBenefit(false)}>
+          <div className="modal" style={{ width: 'min(440px, 100%)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Nueva Prestación</h3>
+              <button className="modal-close" onClick={() => setShowAddBenefit(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <form
+                onSubmit={(e) => { e.preventDefault(); submitNewBenefit(); }}
+                style={{ display: 'grid', gap: 14 }}
+              >
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)' }}>NOMBRE</span>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={draftBenefit.name}
+                    onChange={(e) => setDraftBenefit({ ...draftBenefit, name: e.target.value })}
+                    placeholder="Ej. Despensa, Vales, Bono Productividad"
+                    style={{ padding: '6px 8px', border: '1px solid var(--line)', background: 'var(--panel)', font: 'inherit' }}
+                  />
+                </label>
+
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)' }}>UNIDAD</span>
+                  <select
+                    value={draftBenefit.unit}
+                    onChange={(e) => setDraftBenefit({ ...draftBenefit, unit: e.target.value })}
+                    style={{ padding: '6px 8px', border: '1px solid var(--line)', background: 'var(--panel)', font: 'inherit' }}
+                  >
+                    <option value="pct">Porcentaje (%)</option>
+                    <option value="días">Días</option>
+                  </select>
+                </label>
+
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)' }}>
+                    VALOR {draftBenefit.unit === 'pct' ? '(%)' : `(${draftBenefit.unit})`}
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={draftBenefit.value}
+                    onChange={(e) => setDraftBenefit({ ...draftBenefit, value: e.target.value })}
+                    placeholder={draftBenefit.unit === 'pct' ? 'Ej. 25 (= 25%)' : 'Ej. 15'}
+                    style={{ padding: '6px 8px', border: '1px solid var(--line)', background: 'var(--panel)', font: 'inherit', textAlign: 'right' }}
+                  />
+                </label>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+                  <button type="button" className="btn" onClick={() => setShowAddBenefit(false)}>Cancelar</button>
+                  <button type="submit" className="btn btn-primary">Agregar</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAuthModal && (
+        <AuthModal
+          onAuthorize={handleAuthorize}
+          onClose={() => setShowAuthModal(false)}
+        />
       )}
 
       {showPolicy && (() => {
@@ -466,5 +631,87 @@ export default function RH() {
         );
       })()}
     </>
+  );
+}
+
+function AuthModal({ onAuthorize, onClose }) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (password === '12345') {
+      onAuthorize(password);
+      return;
+    }
+    setError('Password incorrecto');
+    setPassword('');
+    inputRef.current?.focus();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal auth-modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(460px, 100%)' }}>
+        <div className="modal-header">
+          <h3>Autorización requerida</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Cerrar">×</button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body" style={{ padding: '24px 22px' }}>
+            <div className="auth-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+            </div>
+            <p style={{ fontFamily: "'IBM Plex Serif'", fontSize: 14, lineHeight: 1.5, margin: '14px 0 6px', color: 'var(--ink)' }}>
+              Estás por alterar los <strong>estándares autorizados</strong>. Revisa tus permisos.
+            </p>
+            <p style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.05em', color: 'var(--ink-mute)', textTransform: 'uppercase' }}>
+              Solo personal con permiso de Recursos Humanos puede modificar plantilla, sueldos y prestaciones.
+            </p>
+            <label className="form-field auth-password" style={{ marginTop: 18, textAlign: 'left' }}>
+              <span>INGRESA TU PASSWORD</span>
+              <input
+                ref={inputRef}
+                type="password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); if (error) setError(''); }}
+                placeholder="••••••"
+                autoComplete="off"
+              />
+            </label>
+            {error && (
+              <div style={{
+                color: 'var(--neg)', fontFamily: "'IBM Plex Mono'", fontSize: 11,
+                textAlign: 'left', marginTop: 8,
+              }}>
+                {error}
+              </div>
+            )}
+          </div>
+          <div style={{
+            padding: '12px 20px',
+            borderTop: '1px solid var(--line)',
+            display: 'flex', justifyContent: 'flex-end', gap: 8,
+            background: 'var(--panel-alt)',
+          }}>
+            <button type="button" className="btn" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary">Autorizado</button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

@@ -9,6 +9,7 @@ import Footer from './components/Footer';
 import DashboardGeneral from './modules/DashboardGeneral';
 import Dashboard from './modules/Dashboard';
 import VentaReal from './modules/VentaReal';
+import ProdReal from './modules/ProdReal';
 import Ingenieria from './modules/Ingenieria';
 import Compras from './modules/Compras';
 import RH from './modules/RH';
@@ -22,6 +23,7 @@ const MODULES = {
   general:      DashboardGeneral,
   dashboard:    Dashboard,
   ventaReal:    VentaReal,
+  prodReal:     ProdReal,
   ingenieria:   Ingenieria,
   compras:      Compras,
   rh:           RH,

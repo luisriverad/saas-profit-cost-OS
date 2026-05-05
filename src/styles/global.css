@@ -338,6 +338,31 @@ body {
 }
 .month-picker-select:focus { outline: none; }
 
+.period-pill {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.period-pill-label {
+  padding: 8px 10px 8px 12px;
+  color: var(--ink-mute);
+  border-right: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+}
+.period-pill-value {
+  padding: 8px 14px;
+  color: var(--ink);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+}
+
 /* ===================== KPI STRIP ===================== */
 .kpi-strip {
   display: grid;
@@ -567,6 +592,37 @@ td.cell-input input:focus {
   background: #fff;
   box-shadow: inset 0 0 0 2px var(--input-border);
 }
+
+/* COSTOS (Cálculo) row types — overriding tbody td color */
+.cc-row-section td {
+  background: #1f4f8a !important;
+  color: #fff !important;
+  font-weight: 700;
+}
+.cc-row-section td.cell-input { background: var(--input-bg) !important; color: var(--input-border) !important; }
+.cc-row-summary td {
+  background: #fffae8 !important;
+  font-weight: 600;
+}
+.cc-row-subtotal td {
+  background: var(--panel-alt) !important;
+  font-weight: 700;
+  border-top: 2px solid var(--ink) !important;
+}
+.cc-row-plantsub td {
+  background: #e8f4ec !important;
+  font-weight: 700;
+}
+.cc-row-section td.cc-total-cell,
+.cc-row-detail td.cc-total-cell,
+.cc-row-summary td.cc-total-cell,
+.cc-row-subtotal td.cc-total-cell,
+.cc-row-plantsub td.cc-total-cell {
+  background: #0a0a0a !important;
+  color: #fff !important;
+  font-weight: 700;
+}
+.cc-row-section td.cc-total-cell { background: #1f4f8a !important; }
 
 td.cell-formula {
   background: var(--formula-bg);
