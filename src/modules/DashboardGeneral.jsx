@@ -1260,7 +1260,7 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel, ventaVarMesTotal = 0
                 expanded={desgloseExpanded}
                 onToggle={() => setDesgloseExpanded((v) => !v)}
                 breakdownMes={[
-                  { label: 'Var. Materia Prima',    value: mes.varMp },
+                  { label: 'Var. Precio Materia Prima', value: mes.varMp },
                   { label: 'Var. Uso de Material',  value: mes.varMp },
                   { label: 'Var. MOD',              value: mes.varMod },
                   { label: 'Var. Gto. Variable',    value: mes.varGv },
