@@ -292,6 +292,25 @@ function computeEstadoResultados(periodIdx) {
   acum.margenBruto = acum.ventas > 0 ? acum.utBruta / acum.ventas : 0;
   acum.margenOp    = acum.ventas > 0 ? acum.utOp    / acum.ventas : 0;
 
+  // === Costo estándar y variaciones de manufactura (mes y acumulado) ===
+  const prMes  = computeProdRealVariations(periodIdx, false);
+  const prAcum = computeProdRealVariations(periodIdx, true);
+
+  const attachVariations = (target, src) => {
+    target.costoMpStd = src.totalMpStd;
+    target.absMod     = src.absMod;
+    target.absGv      = src.absGv;
+    target.absGf      = src.absGf;
+    target.costoStd   = src.totalMpStd + src.absMod + src.absGv + src.absGf;
+    target.varMp      = src.varMp;
+    target.varMod     = src.varMod;
+    target.varGv      = src.varGv;
+    target.varGf      = src.varGf;
+    target.varTotal   = src.varMp + src.varMod + src.varGv + src.varGf;
+  };
+  attachVariations(mes,  prMes);
+  attachVariations(acum, prAcum);
+
   // Forecast YTD (suma desde Ene hasta el mes seleccionado)
   const fcst = { ventas: 0, costoTotal: 0, utBruta: 0, gtosOp: 0, utOp: 0 };
   for (let i = 0; i <= periodIdx; i++) {
@@ -318,12 +337,123 @@ function computeEstadoResultados(periodIdx) {
   return { mes, acum, fcst, fcstMes };
 }
 
+// ===== ANÁLISIS FINANCIERO IA =====
+// Genera interpretación estructurada examinando todas las fuentes de datos del dashboard.
+// Determinístico (basado en reglas sobre datos reales). Reemplazable más adelante por
+// una llamada a Claude vía backend sin tocar el resto del componente.
+function generateFinancialAnalysis({ er, prVarMes, prVarAcum, ventaVarMes, ventaVarAcum, mesLabel, acumLabel: acumLbl }) {
+  const { mes, acum, fcst, fcstMes } = er;
+  const interpretation = [];
+  const recommendations = [];
+  const warnings = [];
+  const actions = [];
+
+  // ---- Ventas ----
+  const ventasDeltaPct = fcst.ventas ? ((acum.ventas - fcst.ventas) / Math.abs(fcst.ventas)) * 100 : 0;
+  const ventasDeltaMesPct = fcstMes.ventas ? ((mes.ventas - fcstMes.ventas) / Math.abs(fcstMes.ventas)) * 100 : 0;
+  if (ventasDeltaPct < -3) {
+    interpretation.push(`Ventas YTD ${ventasDeltaPct.toFixed(1)}% por debajo del forecast (${fmtMoneyM(acum.ventas)} vs ${fmtMoneyM(fcst.ventas)}).`);
+    warnings.push(`Pérdida de tracción comercial sostenida — gap acumulado de ${fmtMoneyM(fcst.ventas - acum.ventas)}.`);
+    actions.push('Revisar pipeline comercial, mix de clientes y disciplina de descuentos en los próximos 15 días.');
+  } else if (ventasDeltaPct > 3) {
+    interpretation.push(`Ventas YTD superan al forecast en ${ventasDeltaPct.toFixed(1)}% (${fmtMoneyM(acum.ventas)} vs ${fmtMoneyM(fcst.ventas)}).`);
+    recommendations.push('Validar capacidad productiva y nivel de inventario para sostener el ritmo de venta.');
+  } else {
+    interpretation.push(`Ventas YTD en línea con el forecast (${ventasDeltaPct.toFixed(1)}% de desviación).`);
+  }
+  if (ventasDeltaMesPct < -5) {
+    warnings.push(`Mes ${mesLabel}: ventas ${ventasDeltaMesPct.toFixed(1)}% bajo forecast — desviación mensual relevante.`);
+  }
+
+  // ---- Variaciones por producto en venta ----
+  const prodNeg = ventaVarAcum.items.filter((i) => i.rawVar < 0).sort((a, b) => a.rawVar - b.rawVar);
+  const prodPos = ventaVarAcum.items.filter((i) => i.rawVar > 0).sort((a, b) => b.rawVar - a.rawVar);
+  if (prodNeg.length) {
+    const peor = prodNeg[0];
+    interpretation.push(`Producto con mayor caída de venta YTD: ${peor.name} con ${fmtMoneyMSigned(peor.rawVar)} (volumen ${fmtMoneyMSigned(peor.xVolumen)} · precio ${fmtMoneyMSigned(peor.xPrecio)}).`);
+    if (Math.abs(peor.xVolumen) > Math.abs(peor.xPrecio)) {
+      actions.push(`${peor.name}: el problema es VOLUMEN, no precio. Verificar disponibilidad, clientes perdidos o sustitución.`);
+    } else {
+      actions.push(`${peor.name}: el problema es PRECIO/MIX. Auditar lista de precios y nivel de descuentos aplicados.`);
+    }
+  }
+  if (prodPos.length) {
+    interpretation.push(`Producto con mejor desempeño: ${prodPos[0].name} aportando ${fmtMoneyMSigned(prodPos[0].rawVar)} sobre forecast.`);
+  }
+
+  // ---- Margen Bruto ----
+  const margenDeltaPP = (acum.margenBruto - fcst.margenBruto) * 100;
+  if (margenDeltaPP < -1) {
+    interpretation.push(`Margen Bruto YTD se comprime ${margenDeltaPP.toFixed(1)} p.p. vs forecast (${fmtPct(acum.margenBruto)} vs ${fmtPct(fcst.margenBruto)}).`);
+    warnings.push('Compresión de margen bruto fuera del rango natural — riesgo estructural si persiste.');
+  } else if (margenDeltaPP > 1) {
+    interpretation.push(`Margen Bruto YTD expande ${margenDeltaPP.toFixed(1)} p.p. vs forecast — mix u operación favorable.`);
+  }
+
+  // ---- Variaciones de Manufactura ----
+  const varTotalAcum = prVarAcum.varMp + prVarAcum.varMod + prVarAcum.varGv + prVarAcum.varGf;
+  const varTotalMes  = prVarMes.varMp  + prVarMes.varMod  + prVarMes.varGv  + prVarMes.varGf;
+  const sign = (n) => n > 0 ? 'desfavorable' : n < 0 ? 'favorable' : 'sin variación';
+  interpretation.push(`Variación neta de manufactura YTD: ${fmtMoneyMSigned(varTotalAcum)} (${sign(varTotalAcum)}). Mes ${mesLabel}: ${fmtMoneyMSigned(varTotalMes)} (${sign(varTotalMes)}).`);
+
+  // MP
+  if (prVarAcum.varMp > 200000) {
+    warnings.push(`Variación desfavorable de Materia Prima YTD: ${fmtMoneyMSigned(prVarAcum.varMp)}. Consumo o precio fuera de estándar.`);
+    const peoresMp = [...prVarAcum.mpDetail].sort((a, b) => b.varT - a.varT).slice(0, 2).filter((x) => x.varT > 0);
+    if (peoresMp.length) {
+      actions.push(`Auditar consumo y precio de compra de: ${peoresMp.map((m) => m.name).join(', ')}.`);
+    }
+  } else if (prVarAcum.varMp < -200000) {
+    interpretation.push(`Variación favorable de MP YTD ${fmtMoneyMSigned(prVarAcum.varMp)} — eficiencia o mejora de precio.`);
+    recommendations.push('Validar si el ahorro es estructural (compra) o circunstancial (mix), para actualizar el estándar.');
+  }
+  // MOD
+  if (prVarAcum.varMod > 100000) {
+    warnings.push(`Mano de Obra YTD desfavorable: ${fmtMoneyMSigned(prVarAcum.varMod)}. Posible baja eficiencia o sobre-tiempo.`);
+    actions.push('Revisar productividad por centro de costo y horas extra de los últimos meses.');
+  } else if (prVarAcum.varMod < -100000) {
+    interpretation.push(`Eficiencia de MOD por encima del estándar (${fmtMoneyMSigned(prVarAcum.varMod)}).`);
+  }
+  // GV
+  if (Math.abs(prVarAcum.varGv) > 80000) {
+    interpretation.push(`Gastos Variables YTD ${sign(prVarAcum.varGv)}: ${fmtMoneyMSigned(prVarAcum.varGv)}.`);
+  }
+  // GF / Absorción
+  if (prVarAcum.varGf > 150000) {
+    warnings.push(`Sub-absorción de Gastos Fijos YTD: ${fmtMoneyMSigned(prVarAcum.varGf)} — volumen producido por debajo del que carga la cuota.`);
+    actions.push('Revisar plan de producción vs capacidad cargada en cuotas. Decisión: ajustar cuota o recuperar volumen.');
+  } else if (prVarAcum.varGf < -150000) {
+    interpretation.push(`Sobre-absorción favorable de GF (${fmtMoneyMSigned(prVarAcum.varGf)}) — volumen real superior al que carga la cuota.`);
+  }
+
+  // ---- Utilidad Operativa ----
+  const utOpDeltaPct = fcst.utOp ? ((acum.utOp - fcst.utOp) / Math.abs(fcst.utOp)) * 100 : 0;
+  if (utOpDeltaPct < -10) {
+    warnings.push(`Utilidad Operativa YTD ${utOpDeltaPct.toFixed(1)}% vs forecast (${fmtMoneyM(acum.utOp)} vs ${fmtMoneyM(fcst.utOp)}).`);
+    interpretation.push('La presión a la utilidad operativa proviene principalmente de ' + (Math.abs(acum.ventas - fcst.ventas) > Math.abs(acum.costoTotal - fcst.costoTotal) ? 'menores ventas' : 'mayores costos') + '.');
+  }
+
+  // ---- Recomendaciones generales ----
+  if (recommendations.length === 0 && warnings.length === 0) {
+    recommendations.push('Resultados estables — mantener la disciplina operativa actual y monitorear desviaciones puntuales.');
+  }
+  if (Math.abs(varTotalAcum) > 500000) {
+    recommendations.push('Convocar revisión mensual de variaciones con Producción, Compras y Costos para alinear estándares.');
+  }
+  if (acum.margenBruto < 0.20) {
+    warnings.push(`Margen Bruto YTD bajo (${fmtPct(acum.margenBruto)}) — revisar estructura de costos vs precio de venta.`);
+  }
+
+  return { interpretation, recommendations, warnings, actions };
+}
+
 export default function DashboardGeneral() {
   const [varSide, setVarSide] = useState(null);
   const [mpClick, setMpClick] = useState(null);
   const [absClick, setAbsClick] = useState(null);
   const [ventaClick, setVentaClick] = useState(null);
   const [periodIdx, setPeriodIdx] = useState(readPeriodIdx);
+  const [iaOpen, setIaOpen] = useState(false);
 
   const handleSelectMes = (e) => {
     const next = parseInt(e.target.value, 10);
@@ -339,16 +469,17 @@ export default function DashboardGeneral() {
   const er = computeEstadoResultados(periodIdx);
 
   useEffect(() => {
-    const anyOpen = varSide || mpClick || absClick || ventaClick;
+    const anyOpen = varSide || mpClick || absClick || ventaClick || iaOpen;
     if (!anyOpen) return;
     const onKey = (e) => {
       if (e.key === 'Escape') {
         setVarSide(null); setMpClick(null); setAbsClick(null); setVentaClick(null);
+        setIaOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [varSide, mpClick, absClick, ventaClick]);
+  }, [varSide, mpClick, absClick, ventaClick, iaOpen]);
 
   return (
     <>
@@ -523,6 +654,21 @@ export default function DashboardGeneral() {
           />
         );
       })()}
+
+      <FinancialAnalysisPanel onOpen={() => setIaOpen(true)} />
+
+      {iaOpen && (
+        <FinancialAnalysisModal
+          analysis={generateFinancialAnalysis({
+            er, prVarMes, prVarAcum, ventaVarMes, ventaVarAcum,
+            mesLabel: prVarMes.period,
+            acumLabel: acumLabel(periodIdx),
+          })}
+          mesLabel={prVarMes.period}
+          acumLabel={acumLabel(periodIdx)}
+          onClose={() => setIaOpen(false)}
+        />
+      )}
     </>
   );
 }
@@ -784,6 +930,43 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
     );
   };
 
+  // Fila para variaciones de manufactura (Real − Estándar). Convención:
+  //   negativo = favorable (verde) · positivo = desfavorable (rojo).
+  // Forecast no tiene variaciones (se asume al estándar) → muestra "—".
+  const VariationRow = ({ label, mesV, acumV }) => {
+    const colorMes  = mesV  < 0 ? 'var(--pos)' : mesV  > 0 ? 'var(--neg)' : 'var(--ink-mute)';
+    const colorAcum = acumV < 0 ? 'var(--pos)' : acumV > 0 ? 'var(--neg)' : 'var(--ink-mute)';
+    const dispMes   = mesV  === 0 ? '$0' : fmtMoneyMSigned(mesV);
+    const dispAcum  = acumV === 0 ? '$0' : fmtMoneyMSigned(acumV);
+    const numCell = {
+      padding: '8px 12px', textAlign: 'right',
+      fontFamily: "'IBM Plex Mono'", fontVariantNumeric: 'tabular-nums',
+      fontSize: 11, fontWeight: 600,
+    };
+    const muteCell = {
+      ...numCell, fontWeight: 400, fontStyle: 'italic',
+      color: 'var(--ink-mute)',
+    };
+    return (
+      <tr style={{ background: '#fafafa', borderBottom: '1px solid var(--line-soft)' }}>
+        <td style={{
+          padding: '8px 14px', paddingLeft: 32,
+          fontFamily: "'IBM Plex Sans', sans-serif",
+          fontSize: 11, fontStyle: 'italic',
+          color: 'var(--ink-soft)',
+        }}>
+          {label}
+        </td>
+        <td style={{ ...numCell, color: colorMes }}>{dispMes}</td>
+        <td style={muteCell}>—</td>
+        <td style={muteCell}>—</td>
+        <td style={{ ...numCell, color: colorAcum, borderLeft: '1px solid var(--line)' }}>{dispAcum}</td>
+        <td style={muteCell}>—</td>
+        <td style={muteCell}>—</td>
+      </tr>
+    );
+  };
+
   return (
     <div style={{ maxWidth: 1080, margin: '24px auto', padding: '0 16px' }}>
       <div style={{
@@ -822,6 +1005,14 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
               accent="var(--accent-3)"
             />
             <HeroCard
+              label="Costo de Ventas"
+              value={fmtMoneyM(mes.costoTotal)}
+              sub={`MP ${fmtMoneyM(mes.costoMp)} · Conv ${fmtMoneyM(mes.costoMod + mes.costoGv + mes.costoGf)}`}
+              deltaText={`${(deltaPct(mes.costoTotal, fcstMes.costoTotal) * 100).toFixed(1)}% vs FCST`}
+              positive={mes.costoTotal <= fcstMes.costoTotal}
+              accent="var(--accent-2)"
+            />
+            <HeroCard
               label="Utilidad Bruta"
               value={fmtMoneyM(mes.utBruta)}
               sub={`Margen ${fmtPct(mes.margenBruto)} · FCST ${fmtMoneyM(fcstMes.utBruta)}`}
@@ -837,14 +1028,6 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
               positive={mes.utOp >= fcstMes.utOp}
               accent="var(--accent)"
             />
-            <HeroCard
-              label="Costo de Ventas"
-              value={fmtMoneyM(mes.costoTotal)}
-              sub={`MP ${fmtMoneyM(mes.costoMp)} · Conv ${fmtMoneyM(mes.costoMod + mes.costoGv + mes.costoGf)}`}
-              deltaText={`${(deltaPct(mes.costoTotal, fcstMes.costoTotal) * 100).toFixed(1)}% vs FCST`}
-              positive={mes.costoTotal <= fcstMes.costoTotal}
-              accent="var(--accent-2)"
-            />
           </div>
 
           <RowLabel text={`ACUMULADO YTD · ${acumLabel}`} />
@@ -856,6 +1039,14 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
               deltaText={`${(ventasDelta * 100).toFixed(1)}% vs FCST`}
               positive={ventasDelta >= 0}
               accent="var(--accent-3)"
+            />
+            <HeroCard
+              label="Costo de Ventas"
+              value={fmtMoneyM(acum.costoTotal)}
+              sub={`MP ${fmtMoneyM(acum.costoMp)} · Conv ${fmtMoneyM(acum.costoMod + acum.costoGv + acum.costoGf)}`}
+              deltaText={`${(deltaPct(acum.costoTotal, fcst.costoTotal) * 100).toFixed(1)}% vs FCST`}
+              positive={acum.costoTotal <= fcst.costoTotal}
+              accent="var(--accent-2)"
             />
             <HeroCard
               label="Utilidad Bruta"
@@ -872,14 +1063,6 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
               deltaText={`${(utOpDelta * 100).toFixed(1)}% vs FCST`}
               positive={utOpDelta >= 0}
               accent="var(--accent)"
-            />
-            <HeroCard
-              label="Costo de Ventas"
-              value={fmtMoneyM(acum.costoTotal)}
-              sub={`MP ${fmtMoneyM(acum.costoMp)} · Conv ${fmtMoneyM(acum.costoMod + acum.costoGv + acum.costoGf)}`}
-              deltaText={`${(deltaPct(acum.costoTotal, fcst.costoTotal) * 100).toFixed(1)}% vs FCST`}
-              positive={acum.costoTotal <= fcst.costoTotal}
-              accent="var(--accent-2)"
             />
           </div>
         </div>
@@ -919,11 +1102,16 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
             </thead>
             <tbody>
               <Row label="Ventas Netas" mesV={mes.ventas} fcstMesV={fcstMes.ventas} acumV={acum.ventas} fcstV={fcst.ventas} />
-              <Row label="(−) Costo de Ventas" mesV={mes.costoTotal} fcstMesV={fcstMes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost />
-              <Row label="Materia Prima" mesV={mes.costoMp} fcstMesV={fcstMes.costoTotal * (mes.costoMp / Math.max(mes.costoTotal, 1))} acumV={acum.costoMp} fcstV={fcst.costoTotal * (acum.costoMp / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="Mano de Obra" mesV={mes.costoMod} fcstMesV={fcstMes.costoTotal * (mes.costoMod / Math.max(mes.costoTotal, 1))} acumV={acum.costoMod} fcstV={fcst.costoTotal * (acum.costoMod / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="Gastos Variables" mesV={mes.costoGv} fcstMesV={fcstMes.costoTotal * (mes.costoGv / Math.max(mes.costoTotal, 1))} acumV={acum.costoGv} fcstV={fcst.costoTotal * (acum.costoGv / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="Gastos Fijos" mesV={mes.costoGf} fcstMesV={fcstMes.costoTotal * (mes.costoGf / Math.max(mes.costoTotal, 1))} acumV={acum.costoGf} fcstV={fcst.costoTotal * (acum.costoGf / Math.max(acum.costoTotal, 1))} isCost indent />
+              <Row label="(−) Costo de Ventas Estándar" mesV={mes.costoStd} fcstMesV={fcstMes.costoTotal} acumV={acum.costoStd} fcstV={fcst.costoTotal} isCost />
+              <Row label="Materia Prima · Std" mesV={mes.costoMpStd} fcstMesV={fcstMes.costoTotal * (mes.costoMpStd / Math.max(mes.costoStd, 1))} acumV={acum.costoMpStd} fcstV={fcst.costoTotal * (acum.costoMpStd / Math.max(acum.costoStd, 1))} isCost indent />
+              <Row label="Mano de Obra · Absorción" mesV={mes.absMod} fcstMesV={fcstMes.costoTotal * (mes.absMod / Math.max(mes.costoStd, 1))} acumV={acum.absMod} fcstV={fcst.costoTotal * (acum.absMod / Math.max(acum.costoStd, 1))} isCost indent />
+              <Row label="Gastos Variables · Absorción" mesV={mes.absGv} fcstMesV={fcstMes.costoTotal * (mes.absGv / Math.max(mes.costoStd, 1))} acumV={acum.absGv} fcstV={fcst.costoTotal * (acum.absGv / Math.max(acum.costoStd, 1))} isCost indent />
+              <Row label="Gastos Fijos · Absorción" mesV={mes.absGf} fcstMesV={fcstMes.costoTotal * (mes.absGf / Math.max(mes.costoStd, 1))} acumV={acum.absGf} fcstV={fcst.costoTotal * (acum.absGf / Math.max(acum.costoStd, 1))} isCost indent />
+              <VariationRow label="Variación · Materia Prima"      mesV={mes.varMp}    acumV={acum.varMp} />
+              <VariationRow label="Variación · Mano de Obra"       mesV={mes.varMod}   acumV={acum.varMod} />
+              <VariationRow label="Variación · Gastos Indirectos"  mesV={mes.varGv}    acumV={acum.varGv} />
+              <VariationRow label="Variación · Absorción G. Fijos" mesV={mes.varGf}    acumV={acum.varGf} />
+              <Row label="(−) Costo de Ventas Ajustado" mesV={mes.costoTotal} fcstMesV={fcstMes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost isSubtotal />
               <Row label="═ Utilidad Bruta" mesV={mes.utBruta} fcstMesV={fcstMes.utBruta} acumV={acum.utBruta} fcstV={fcst.utBruta} isSubtotal />
               <Row label="Margen Bruto" mesV={mes.margenBruto} fcstMesV={fcstMes.margenBruto} acumV={acum.margenBruto} fcstV={fcst.margenBruto} isMargin indent />
               <Row label="(−) Gastos de Operación" mesV={mes.gtosOp} fcstMesV={fcstMes.gtosOp} acumV={acum.gtosOp} fcstV={fcst.gtosOp} isCost />
@@ -1226,6 +1414,181 @@ function VariationModal({ side, onClose }) {
               </tfoot>
             </table>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== ANÁLISIS FINANCIERO · Panel + Modal =====
+function FinancialAnalysisPanel({ onOpen }) {
+  return (
+    <div style={{
+      maxWidth: 1080, margin: '32px auto 24px', padding: '0 16px',
+    }}>
+      <div style={{
+        position: 'relative',
+        background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%)',
+        color: '#fff',
+        border: '1px solid #0a0a0a',
+        padding: '28px 32px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 24, flexWrap: 'wrap',
+      }}>
+        <div style={{ flex: '1 1 420px' }}>
+          <div style={{
+            display: 'inline-block',
+            padding: '3px 10px',
+            background: 'var(--gold)', color: '#0a0a0a',
+            fontFamily: "'IBM Plex Mono'", fontSize: 9, fontWeight: 700,
+            letterSpacing: '0.14em', marginBottom: 10,
+          }}>POWERED BY IA</div>
+          <h3 style={{
+            margin: 0, fontFamily: "'IBM Plex Serif'",
+            fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em',
+          }}>Análisis Financiero Inteligente</h3>
+          <p style={{
+            margin: '8px 0 0', fontFamily: "'IBM Plex Serif'",
+            fontSize: 13, color: 'rgba(255,255,255,0.75)',
+            fontStyle: 'italic', lineHeight: 1.5,
+          }}>
+            Interpreta toda la información de Ventas, Producción, Costos, Compras, Forecast y Variaciones.
+            Genera lectura ejecutiva, recomendaciones, alertas y acciones priorizadas.
+          </p>
+        </div>
+        <button
+          onClick={onOpen}
+          style={{
+            background: 'var(--gold)', color: '#0a0a0a',
+            border: 'none', padding: '14px 28px',
+            fontFamily: "'IBM Plex Mono'", fontSize: 12, fontWeight: 700,
+            letterSpacing: '0.12em', textTransform: 'uppercase',
+            cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 10,
+            transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.35)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+        >
+          ▸ Análisis Financiero
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FinancialAnalysisModal({ analysis, mesLabel, acumLabel, onClose }) {
+  const { interpretation, recommendations, warnings, actions } = analysis;
+  const Section = ({ tag, title, accent, items, emptyText, icon }) => (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+      }}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 24, height: 24, background: accent, color: '#0a0a0a',
+          fontFamily: "'IBM Plex Mono'", fontSize: 12, fontWeight: 700,
+        }}>{icon}</span>
+        <span style={{
+          fontFamily: "'IBM Plex Mono'", fontSize: 9, fontWeight: 700,
+          letterSpacing: '0.16em', color: 'var(--ink-mute)',
+        }}>{tag}</span>
+        <h4 style={{
+          margin: 0, fontFamily: "'IBM Plex Serif'", fontSize: 16, fontWeight: 600,
+        }}>{title}</h4>
+      </div>
+      {items.length === 0 ? (
+        <p style={{
+          margin: 0, paddingLeft: 34,
+          fontFamily: "'IBM Plex Serif'", fontSize: 13, fontStyle: 'italic',
+          color: 'var(--ink-mute)',
+        }}>{emptyText}</p>
+      ) : (
+        <ul style={{ margin: 0, paddingLeft: 34, listStyle: 'none' }}>
+          {items.map((t, i) => (
+            <li key={i} style={{
+              position: 'relative', padding: '6px 0 6px 16px',
+              fontFamily: "'IBM Plex Serif'", fontSize: 13.5, lineHeight: 1.55,
+              color: 'var(--ink)',
+              borderLeft: `2px solid ${accent}`,
+              marginBottom: 4, paddingLeft: 14,
+            }}>
+              {t}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(820px, 100%)', maxHeight: '88vh', overflowY: 'auto' }}>
+        <div className="modal-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h3>Análisis Financiero</h3>
+            <span className="modal-tag" style={{ background: 'var(--gold)', color: '#0a0a0a' }}>IA</span>
+            <span style={{
+              fontFamily: "'IBM Plex Mono'", fontSize: 10, color: 'var(--ink-mute)',
+              letterSpacing: '0.08em',
+            }}>{mesLabel} · ACUM {acumLabel}</span>
+          </div>
+          <button className="modal-close" onClick={onClose} aria-label="Cerrar">×</button>
+        </div>
+        <div className="modal-body">
+          <p style={{
+            margin: '0 0 18px',
+            fontFamily: "'IBM Plex Serif'", fontSize: 12.5, fontStyle: 'italic',
+            color: 'var(--ink-soft)', lineHeight: 1.55,
+            paddingBottom: 14, borderBottom: '1px solid var(--line)',
+          }}>
+            Interpretación generada a partir del Estado de Resultados, variaciones de
+            manufactura (MP / MOD / GV / GF), variaciones de venta (volumen y precio),
+            y comparación contra el Forecast del periodo seleccionado.
+          </p>
+
+          <Section
+            tag="01 · LECTURA"
+            title="Interpretación"
+            accent="var(--accent-3)"
+            icon="i"
+            items={interpretation}
+            emptyText="Sin lecturas relevantes con los datos disponibles."
+          />
+          <Section
+            tag="02 · ALERTAS"
+            title="Warnings"
+            accent="var(--neg)"
+            icon="!"
+            items={warnings}
+            emptyText="Sin alertas críticas — operación dentro de rangos normales."
+          />
+          <Section
+            tag="03 · RECOMENDACIONES"
+            title="Recomendaciones"
+            accent="var(--gold)"
+            icon="★"
+            items={recommendations}
+            emptyText="Sin recomendaciones específicas en este momento."
+          />
+          <Section
+            tag="04 · NEXT STEPS"
+            title="Acciones a Seguir"
+            accent="var(--accent)"
+            icon="→"
+            items={actions}
+            emptyText="Sin acciones priorizadas pendientes."
+          />
+
+          <div style={{
+            marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--line)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            fontFamily: "'IBM Plex Mono'", fontSize: 9.5,
+            color: 'var(--ink-mute)', letterSpacing: '0.08em',
+          }}>
+            <span>ANÁLISIS AUTOMATIZADO · BASADO EN DATOS REALES DEL PERIODO</span>
+            <span>{new Date().toLocaleString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
         </div>
       </div>
     </div>
