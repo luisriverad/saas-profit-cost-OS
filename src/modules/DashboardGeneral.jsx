@@ -141,9 +141,12 @@ function shiftVentaSnapshot(periodIdx) {
     const varVentas = +(ventaNeta - fctsVentas).toFixed(2);
     const xVolumen = +(varKgs * r.precio).toFixed(2);
     const xPrecio = +(varVentas - xVolumen).toFixed(2);
-    return { code: r.code, name: r.name, varVentas, xVolumen, xPrecio };
+    return { code: r.code, name: r.name, ventaNeta, varVentas, xVolumen, xPrecio };
   });
-  return { period: PERIODS_LABELS[periodIdx], rows };
+  const totals = {
+    ventaNeta: +rows.reduce((s, r) => s + r.ventaNeta, 0).toFixed(2),
+  };
+  return { period: PERIODS_LABELS[periodIdx], rows, totals };
 }
 
 function aggregateVentaRows(rowsList) {
@@ -301,7 +304,18 @@ function computeEstadoResultados(periodIdx) {
   fcst.margenBruto = fcst.ventas > 0 ? fcst.utBruta / fcst.ventas : 0;
   fcst.margenOp    = fcst.ventas > 0 ? fcst.utOp    / fcst.ventas : 0;
 
-  return { mes, acum, fcst };
+  // Forecast del mes seleccionado
+  const fcstMes = {
+    ventas:      PNL.ventas[periodIdx]        ?? 0,
+    costoTotal:  PNL.totalCosto[periodIdx]    ?? 0,
+    utBruta:     PNL.utBruta[periodIdx]       ?? 0,
+    gtosOp:      PNL.gtosOperacion[periodIdx] ?? 0,
+    utOp:        PNL.utOperacion[periodIdx]   ?? 0,
+  };
+  fcstMes.margenBruto = fcstMes.ventas > 0 ? fcstMes.utBruta / fcstMes.ventas : 0;
+  fcstMes.margenOp    = fcstMes.ventas > 0 ? fcstMes.utOp    / fcstMes.ventas : 0;
+
+  return { mes, acum, fcst, fcstMes };
 }
 
 export default function DashboardGeneral() {
@@ -364,7 +378,9 @@ export default function DashboardGeneral() {
         meta="Real vs Estándar · efecto sobre costo"
       >
         <div style={{ padding: '6px 18px 14px' }}>
-          <VarianceBars data={VARIATIONS} width={1180} onSelect={setVarSide} />
+          <div style={{ maxWidth: 760, margin: '0 auto' }}>
+            <VarianceBars data={VARIATIONS} width={760} onSelect={setVarSide} />
+          </div>
           <div style={{
             marginTop: 10, paddingTop: 12,
             borderTop: '1px solid var(--line)',
@@ -672,16 +688,26 @@ function HeroCard({ label, value, sub, deltaText, positive, accent }) {
 }
 
 function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
-  const { mes, acum, fcst } = data;
+  const { mes, acum, fcst, fcstMes } = data;
   const ventasDelta = deltaPct(acum.ventas, fcst.ventas);
   const utBrutaDelta = deltaPct(acum.utBruta, fcst.utBruta);
   const utOpDelta = deltaPct(acum.utOp, fcst.utOp);
 
-  const Row = ({ label, mesV, acumV, fcstV, isCost, isSubtotal, isMargin, indent }) => {
+  const Row = ({ label, mesV, fcstMesV, acumV, fcstV, isCost, isSubtotal, isMargin, indent }) => {
     const wrapper = (v) => (isCost && typeof v === 'number') ? -Math.abs(v) : v;
     const dispMes = isMargin ? fmtPct(mesV) : fmtMoneyM(wrapper(mesV));
+    const dispFcstMes = isMargin ? fmtPct(fcstMesV) : fmtMoneyM(wrapper(fcstMesV));
     const dispAcum = isMargin ? fmtPct(acumV) : fmtMoneyM(wrapper(acumV));
     const dispFcst = isMargin ? fmtPct(fcstV) : fmtMoneyM(wrapper(fcstV));
+
+    const dPctMes = isMargin
+      ? fmtPctPpDelta(mesV, fcstMesV)
+      : (fcstMesV ? `${(deltaPct(mesV, fcstMesV) * 100).toFixed(1)}%` : '—');
+    const dPctMesVal = isMargin ? (mesV - fcstMesV) : deltaPct(mesV, fcstMesV);
+    const dColorMes = dPctMesVal > 0 ? (isCost ? 'var(--neg)' : 'var(--pos)')
+                    : dPctMesVal < 0 ? (isCost ? 'var(--pos)' : 'var(--neg)')
+                    : 'var(--ink-mute)';
+
     const dPct = isMargin
       ? fmtPctPpDelta(acumV, fcstV)
       : (fcstV ? `${(deltaPct(acumV, fcstV) * 100).toFixed(1)}%` : '—');
@@ -689,6 +715,32 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
     const dColor = dPctVal > 0 ? (isCost ? 'var(--neg)' : 'var(--pos)')
                   : dPctVal < 0 ? (isCost ? 'var(--pos)' : 'var(--neg)')
                   : 'var(--ink-mute)';
+
+    const numCellBase = {
+      padding: '10px 12px', textAlign: 'right',
+      fontFamily: "'IBM Plex Mono'",
+      fontVariantNumeric: 'tabular-nums',
+    };
+    const realCell = {
+      ...numCellBase,
+      fontSize: isSubtotal ? 14 : 12,
+      fontWeight: isSubtotal ? 700 : 500,
+      color: isMargin ? 'var(--gold)' : 'inherit',
+    };
+    const fcstCell = {
+      ...numCellBase,
+      fontSize: isSubtotal ? 13 : 11,
+      fontWeight: 400,
+      color: isSubtotal ? 'rgba(255,255,255,0.7)' : 'var(--ink-soft)',
+      fontStyle: 'italic',
+    };
+    const deltaCell = (color) => ({
+      ...numCellBase,
+      fontSize: isSubtotal ? 13 : 11,
+      fontWeight: 600,
+      color: isSubtotal ? '#fff' : color,
+    });
+    const acumDivider = { borderLeft: '1px solid var(--line)' };
 
     return (
       <tr style={{
@@ -710,55 +762,40 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
         }}>
           {label}
         </td>
-        <td style={{
-          padding: '10px 14px', textAlign: 'right',
-          fontFamily: "'IBM Plex Mono'", fontSize: isSubtotal ? 14 : 12,
-          fontWeight: isSubtotal ? 700 : 500,
-          fontVariantNumeric: 'tabular-nums',
-          color: isMargin ? 'var(--gold)' : 'inherit',
-        }}>{dispMes}</td>
-        <td style={{
-          padding: '10px 14px', textAlign: 'right',
-          fontFamily: "'IBM Plex Mono'", fontSize: isSubtotal ? 14 : 12,
-          fontWeight: isSubtotal ? 700 : 500,
-          fontVariantNumeric: 'tabular-nums',
-          color: isMargin ? 'var(--gold)' : 'inherit',
-        }}>{dispAcum}</td>
-        <td style={{
-          padding: '10px 14px', textAlign: 'right',
-          fontFamily: "'IBM Plex Mono'", fontSize: isSubtotal ? 13 : 11,
-          fontWeight: 400,
-          fontVariantNumeric: 'tabular-nums',
-          color: isSubtotal ? 'rgba(255,255,255,0.7)' : 'var(--ink-soft)',
-          fontStyle: 'italic',
-        }}>{dispFcst}</td>
-        <td style={{
-          padding: '10px 14px', textAlign: 'right',
-          fontFamily: "'IBM Plex Mono'", fontSize: isSubtotal ? 13 : 11,
-          fontWeight: 600,
-          fontVariantNumeric: 'tabular-nums',
-          color: isSubtotal ? '#fff' : dColor,
-        }}>{dPct}</td>
+        <td style={realCell}>{dispMes}</td>
+        <td style={fcstCell}>{dispFcstMes}</td>
+        <td style={deltaCell(dColorMes)}>{dPctMes}</td>
+        <td style={{ ...realCell, ...acumDivider }}>{dispAcum}</td>
+        <td style={fcstCell}>{dispFcst}</td>
+        <td style={deltaCell(dColor)}>{dPct}</td>
       </tr>
     );
   };
 
   return (
-    <Panel
-      title={
-        <span>
-          Estado de Resultados
-          <span style={{
-            marginLeft: 12, padding: '2px 8px',
-            background: '#0a0a0a', color: 'var(--gold)',
-            fontFamily: "'IBM Plex Mono'", fontSize: 9, fontWeight: 700,
-            letterSpacing: '0.14em', verticalAlign: 3,
-          }}>EXECUTIVE</span>
-        </span>
-      }
-      meta={`${mesLabel} · Acumulado ${acumLabel} · Comparativo vs Forecast`}
-    >
-      <div style={{ padding: '20px 22px 22px', background: 'linear-gradient(180deg, var(--panel-alt) 0%, var(--panel) 60%)' }}>
+    <div style={{ maxWidth: 1080, margin: '24px auto', padding: '0 16px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 12,
+        marginBottom: 4, paddingBottom: 10,
+        borderBottom: '1px solid var(--line)',
+      }}>
+        <h3 style={{
+          margin: 0,
+          fontFamily: "'IBM Plex Serif'", fontSize: 20, fontWeight: 600,
+        }}>Estado de Resultados</h3>
+        <span style={{
+          padding: '2px 8px',
+          background: '#0a0a0a', color: 'var(--gold)',
+          fontFamily: "'IBM Plex Mono'", fontSize: 9, fontWeight: 700,
+          letterSpacing: '0.14em',
+        }}>EXECUTIVE</span>
+        <span style={{
+          marginLeft: 'auto',
+          fontFamily: "'IBM Plex Mono'", fontSize: 10,
+          color: 'var(--ink-mute)', letterSpacing: '0.08em',
+        }}>{mesLabel} · Acumulado {acumLabel} · vs Forecast</span>
+      </div>
+      <div style={{ paddingTop: 18 }}>
 
         {/* HERO KPIs */}
         <div style={{
@@ -800,7 +837,7 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
         </div>
 
         {/* P&L TABLE */}
-        <div style={{ background: '#fff', border: '1px solid var(--ink)' }}>
+        <div>
           <div style={{
             background: '#0a0a0a', color: '#fff',
             padding: '10px 14px',
@@ -812,27 +849,38 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
             <span style={{ color: 'var(--gold)' }}>Cifras en MXN</span>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontVariantNumeric: 'tabular-nums' }}>
+            <colgroup>
+              <col />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 80 }} />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 80 }} />
+            </colgroup>
             <thead>
               <tr style={{ background: 'var(--panel-alt)' }}>
                 <th style={{ textAlign: 'left',  padding: '10px 14px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)' }}>Concepto</th>
-                <th style={{ textAlign: 'right', padding: '10px 14px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)', width: 150 }}>{mesLabel}</th>
-                <th style={{ textAlign: 'right', padding: '10px 14px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)', width: 160 }}>ACUMULADO YTD</th>
-                <th style={{ textAlign: 'right', padding: '10px 14px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)', width: 150 }}>FORECAST YTD</th>
-                <th style={{ textAlign: 'right', padding: '10px 14px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)', width: 110 }}>Δ vs FCST</th>
+                <th style={{ textAlign: 'right', padding: '10px 12px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)' }}>{mesLabel}</th>
+                <th style={{ textAlign: 'right', padding: '10px 12px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)' }}>FCST MES</th>
+                <th style={{ textAlign: 'right', padding: '10px 12px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)' }}>Δ MES</th>
+                <th style={{ textAlign: 'right', padding: '10px 12px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)', borderLeft: '1px solid var(--line)' }}>ACUM YTD</th>
+                <th style={{ textAlign: 'right', padding: '10px 12px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)' }}>FCST YTD</th>
+                <th style={{ textAlign: 'right', padding: '10px 12px', fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em', color: 'var(--ink-mute)', borderBottom: '1px solid var(--line)' }}>Δ YTD</th>
               </tr>
             </thead>
             <tbody>
-              <Row label="Ventas Netas" mesV={mes.ventas} acumV={acum.ventas} fcstV={fcst.ventas} />
-              <Row label="(−) Costo de Ventas" mesV={mes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost />
-              <Row label="Materia Prima" mesV={mes.costoMp} acumV={acum.costoMp} fcstV={fcst.costoTotal * (acum.costoMp / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="Mano de Obra" mesV={mes.costoMod} acumV={acum.costoMod} fcstV={fcst.costoTotal * (acum.costoMod / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="Gastos Variables" mesV={mes.costoGv} acumV={acum.costoGv} fcstV={fcst.costoTotal * (acum.costoGv / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="Gastos Fijos" mesV={mes.costoGf} acumV={acum.costoGf} fcstV={fcst.costoTotal * (acum.costoGf / Math.max(acum.costoTotal, 1))} isCost indent />
-              <Row label="═ Utilidad Bruta" mesV={mes.utBruta} acumV={acum.utBruta} fcstV={fcst.utBruta} isSubtotal />
-              <Row label="Margen Bruto" mesV={mes.margenBruto} acumV={acum.margenBruto} fcstV={fcst.margenBruto} isMargin indent />
-              <Row label="(−) Gastos de Operación" mesV={mes.gtosOp} acumV={acum.gtosOp} fcstV={fcst.gtosOp} isCost />
-              <Row label="═ Utilidad Operativa" mesV={mes.utOp} acumV={acum.utOp} fcstV={fcst.utOp} isSubtotal />
-              <Row label="Margen Operativo" mesV={mes.margenOp} acumV={acum.margenOp} fcstV={fcst.margenOp} isMargin indent />
+              <Row label="Ventas Netas" mesV={mes.ventas} fcstMesV={fcstMes.ventas} acumV={acum.ventas} fcstV={fcst.ventas} />
+              <Row label="(−) Costo de Ventas" mesV={mes.costoTotal} fcstMesV={fcstMes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost />
+              <Row label="Materia Prima" mesV={mes.costoMp} fcstMesV={fcstMes.costoTotal * (mes.costoMp / Math.max(mes.costoTotal, 1))} acumV={acum.costoMp} fcstV={fcst.costoTotal * (acum.costoMp / Math.max(acum.costoTotal, 1))} isCost indent />
+              <Row label="Mano de Obra" mesV={mes.costoMod} fcstMesV={fcstMes.costoTotal * (mes.costoMod / Math.max(mes.costoTotal, 1))} acumV={acum.costoMod} fcstV={fcst.costoTotal * (acum.costoMod / Math.max(acum.costoTotal, 1))} isCost indent />
+              <Row label="Gastos Variables" mesV={mes.costoGv} fcstMesV={fcstMes.costoTotal * (mes.costoGv / Math.max(mes.costoTotal, 1))} acumV={acum.costoGv} fcstV={fcst.costoTotal * (acum.costoGv / Math.max(acum.costoTotal, 1))} isCost indent />
+              <Row label="Gastos Fijos" mesV={mes.costoGf} fcstMesV={fcstMes.costoTotal * (mes.costoGf / Math.max(mes.costoTotal, 1))} acumV={acum.costoGf} fcstV={fcst.costoTotal * (acum.costoGf / Math.max(acum.costoTotal, 1))} isCost indent />
+              <Row label="═ Utilidad Bruta" mesV={mes.utBruta} fcstMesV={fcstMes.utBruta} acumV={acum.utBruta} fcstV={fcst.utBruta} isSubtotal />
+              <Row label="Margen Bruto" mesV={mes.margenBruto} fcstMesV={fcstMes.margenBruto} acumV={acum.margenBruto} fcstV={fcst.margenBruto} isMargin indent />
+              <Row label="(−) Gastos de Operación" mesV={mes.gtosOp} fcstMesV={fcstMes.gtosOp} acumV={acum.gtosOp} fcstV={fcst.gtosOp} isCost />
+              <Row label="═ Utilidad Operativa" mesV={mes.utOp} fcstMesV={fcstMes.utOp} acumV={acum.utOp} fcstV={fcst.utOp} isSubtotal />
+              <Row label="Margen Operativo" mesV={mes.margenOp} fcstMesV={fcstMes.margenOp} acumV={acum.margenOp} fcstV={fcst.margenOp} isMargin indent />
             </tbody>
           </table>
         </div>
@@ -856,7 +904,7 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
           </span>
         </div>
       </div>
-    </Panel>
+    </div>
   );
 }
 
