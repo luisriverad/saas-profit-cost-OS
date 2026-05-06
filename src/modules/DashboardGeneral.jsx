@@ -648,6 +648,18 @@ function deltaPct(real, fcst) {
   return (real - fcst) / Math.abs(fcst);
 }
 
+function RowLabel({ text }) {
+  return (
+    <div style={{
+      fontFamily: "'IBM Plex Mono'", fontSize: 10, fontWeight: 600,
+      letterSpacing: '0.14em', textTransform: 'uppercase',
+      color: 'var(--ink-mute)',
+      borderTop: '1px solid var(--line)',
+      paddingTop: 6,
+    }}>{text}</div>
+  );
+}
+
 function HeroCard({ label, value, sub, deltaText, positive, accent }) {
   const color = positive === true ? 'var(--pos)' : positive === false ? 'var(--neg)' : 'var(--ink-mute)';
   return (
@@ -797,43 +809,79 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
       </div>
       <div style={{ paddingTop: 18 }}>
 
-        {/* HERO KPIs */}
-        <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12,
-          marginBottom: 22,
-        }}>
-          <HeroCard
-            label={`Ventas · ${mesLabel}`}
-            value={fmtMoneyM(mes.ventas)}
-            sub={`Acumulado YTD: ${fmtMoneyM(acum.ventas)}`}
-            deltaText={`${(ventasDelta * 100).toFixed(1)}% vs Forecast`}
-            positive={ventasDelta >= 0}
-            accent="var(--accent-3)"
-          />
-          <HeroCard
-            label="Utilidad Bruta YTD"
-            value={fmtMoneyM(acum.utBruta)}
-            sub={`Margen ${fmtPct(acum.margenBruto)} · Mes ${fmtMoneyM(mes.utBruta)}`}
-            deltaText={`${fmtPctPpDelta(acum.margenBruto, fcst.margenBruto)} vs FCST`}
-            positive={acum.margenBruto >= fcst.margenBruto}
-            accent="var(--gold)"
-          />
-          <HeroCard
-            label="Utilidad Operativa YTD"
-            value={fmtMoneyM(acum.utOp)}
-            sub={`Margen ${fmtPct(acum.margenOp)} · Mes ${fmtMoneyM(mes.utOp)}`}
-            deltaText={`${(utOpDelta * 100).toFixed(1)}% vs FCST`}
-            positive={utOpDelta >= 0}
-            accent="var(--accent)"
-          />
-          <HeroCard
-            label="Costo de Ventas YTD"
-            value={fmtMoneyM(acum.costoTotal)}
-            sub={`MP ${fmtMoneyM(acum.costoMp)} · Conv ${fmtMoneyM(acum.costoMod + acum.costoGv + acum.costoGf)}`}
-            deltaText={`${(deltaPct(acum.costoTotal, fcst.costoTotal) * 100).toFixed(1)}% vs FCST`}
-            positive={acum.costoTotal <= fcst.costoTotal}
-            accent="var(--accent-2)"
-          />
+        {/* HERO KPIs · MES (arriba) y YTD (abajo) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
+          <RowLabel text={`MES · ${mesLabel}`} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+            <HeroCard
+              label="Ventas"
+              value={fmtMoneyM(mes.ventas)}
+              sub={`Forecast: ${fmtMoneyM(fcstMes.ventas)}`}
+              deltaText={`${(deltaPct(mes.ventas, fcstMes.ventas) * 100).toFixed(1)}% vs FCST`}
+              positive={mes.ventas >= fcstMes.ventas}
+              accent="var(--accent-3)"
+            />
+            <HeroCard
+              label="Utilidad Bruta"
+              value={fmtMoneyM(mes.utBruta)}
+              sub={`Margen ${fmtPct(mes.margenBruto)} · FCST ${fmtMoneyM(fcstMes.utBruta)}`}
+              deltaText={`${fmtPctPpDelta(mes.margenBruto, fcstMes.margenBruto)} vs FCST`}
+              positive={mes.margenBruto >= fcstMes.margenBruto}
+              accent="var(--gold)"
+            />
+            <HeroCard
+              label="Utilidad Operativa"
+              value={fmtMoneyM(mes.utOp)}
+              sub={`Margen ${fmtPct(mes.margenOp)} · FCST ${fmtMoneyM(fcstMes.utOp)}`}
+              deltaText={`${(deltaPct(mes.utOp, fcstMes.utOp) * 100).toFixed(1)}% vs FCST`}
+              positive={mes.utOp >= fcstMes.utOp}
+              accent="var(--accent)"
+            />
+            <HeroCard
+              label="Costo de Ventas"
+              value={fmtMoneyM(mes.costoTotal)}
+              sub={`MP ${fmtMoneyM(mes.costoMp)} · Conv ${fmtMoneyM(mes.costoMod + mes.costoGv + mes.costoGf)}`}
+              deltaText={`${(deltaPct(mes.costoTotal, fcstMes.costoTotal) * 100).toFixed(1)}% vs FCST`}
+              positive={mes.costoTotal <= fcstMes.costoTotal}
+              accent="var(--accent-2)"
+            />
+          </div>
+
+          <RowLabel text={`ACUMULADO YTD · ${acumLabel}`} />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+            <HeroCard
+              label="Ventas"
+              value={fmtMoneyM(acum.ventas)}
+              sub={`Forecast: ${fmtMoneyM(fcst.ventas)}`}
+              deltaText={`${(ventasDelta * 100).toFixed(1)}% vs FCST`}
+              positive={ventasDelta >= 0}
+              accent="var(--accent-3)"
+            />
+            <HeroCard
+              label="Utilidad Bruta"
+              value={fmtMoneyM(acum.utBruta)}
+              sub={`Margen ${fmtPct(acum.margenBruto)} · FCST ${fmtMoneyM(fcst.utBruta)}`}
+              deltaText={`${fmtPctPpDelta(acum.margenBruto, fcst.margenBruto)} vs FCST`}
+              positive={acum.margenBruto >= fcst.margenBruto}
+              accent="var(--gold)"
+            />
+            <HeroCard
+              label="Utilidad Operativa"
+              value={fmtMoneyM(acum.utOp)}
+              sub={`Margen ${fmtPct(acum.margenOp)} · FCST ${fmtMoneyM(fcst.utOp)}`}
+              deltaText={`${(utOpDelta * 100).toFixed(1)}% vs FCST`}
+              positive={utOpDelta >= 0}
+              accent="var(--accent)"
+            />
+            <HeroCard
+              label="Costo de Ventas"
+              value={fmtMoneyM(acum.costoTotal)}
+              sub={`MP ${fmtMoneyM(acum.costoMp)} · Conv ${fmtMoneyM(acum.costoMod + acum.costoGv + acum.costoGf)}`}
+              deltaText={`${(deltaPct(acum.costoTotal, fcst.costoTotal) * 100).toFixed(1)}% vs FCST`}
+              positive={acum.costoTotal <= fcst.costoTotal}
+              accent="var(--accent-2)"
+            />
+          </div>
         </div>
 
         {/* P&L TABLE */}
