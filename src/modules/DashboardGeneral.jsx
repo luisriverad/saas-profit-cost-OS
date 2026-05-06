@@ -10,6 +10,20 @@ import {
   PRODUCTION_SCHEDULE,
 } from '../data/seed';
 import { fmtMoney, fmtMoneyNoDec, fmtMoneySigned } from '../utils/format';
+import { COSTOS_CALC_ROWS } from '../data/costosCalc';
+
+// === Contabilidad → DashboardGeneral ===
+// Las variaciones MOD / GV / GF se leen directamente de la pestaña COSTOS (Cálculo)
+// en Contabilidad. Mapeo de filas (campo r):
+//   333 = MOD REAL  · 334 = ABSORCIÓN MOD · 335 = VARIACIÓN MOD
+//   337 = GTOS V    · 338 = ABSORCIÓN GV  · 339 = VARIACIÓN GTOS V
+//   341 = GTOS F    · 342 = ABSORCIÓN GF  · 343 = VARIACIÓN GF
+//   330 = VARIACIONES TOTALES DE MOD, GV y GF (suma de las tres)
+const sumContabRow = (rowR, periods) => {
+  const row = COSTOS_CALC_ROWS.find((x) => x.r === rowR);
+  if (!row?.months) return 0;
+  return periods.reduce((s, i) => s + (row.months[i] ?? 0), 0);
+};
 
 const PERIODS_LABELS = ['ENERO 2026', 'FEBRERO 2026', 'MARZO 2026', 'ABRIL 2026'];
 const PERIODS_WITH_ACUM = [...PERIODS_LABELS, 'ACUMULADO'];
@@ -33,6 +47,24 @@ const ING_BASE_PRODUCTS = [
 const readJson = (key) => {
   try { const raw = window.localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch { return null; }
 };
+
+const COMPRAS_STORAGE_KEY = 'compras.workspace.v1';
+function readComprasCosts() {
+  const stored = readJson(COMPRAS_STORAGE_KEY);
+  const std = {}, real = {};
+  MP_CODES.forEach((c) => { std[c] = MP_COSTS[c] ?? 0; real[c] = MP_COSTS[c] ?? 0; });
+  if (stored?.mps && Array.isArray(stored.mps)) {
+    stored.mps.forEach((m) => {
+      const c = parseInt(m.code, 10);
+      if (!Number.isFinite(c)) return;
+      const cs = parseFloat(m.costStd);
+      const cr = parseFloat(m.costReal);
+      if (Number.isFinite(cs) && cs > 0) std[c]  = cs;
+      if (Number.isFinite(cr) && cr > 0) real[c] = cr;
+    });
+  }
+  return { std, real };
+}
 
 const readPeriodIdx = () => {
   try {
@@ -202,30 +234,92 @@ function computeProdRealVariations(periodIdx, accumulate = false) {
   const ingStored = readJson(ING_STORAGE_KEY);
   const products = ingStored?.products ?? ING_BASE_PRODUCTS;
   const schedule = ingStored?.schedule ?? PRODUCTION_SCHEDULE;
+  const safeIdx = Math.max(0, Math.min(periodIdx, PERIODS_LABELS.length - 1));
   const period = accumulate
     ? `ACUMULADO · ${acumLabel(periodIdx)}`
     : (PERIODS_LABELS[periodIdx] ?? PERIODS_LABELS[0]);
   const snapshot = getSnapshotForPeriod(periodIdx, products, schedule, accumulate);
+  const { std: stdCosts, real: realCosts } = readComprasCosts();
+  const comprasStored = readJson(COMPRAS_STORAGE_KEY);
+  const compradosMap = comprasStored?.comprados ?? {};
+  const periodList = accumulate
+    ? Array.from({ length: safeIdx + 1 }, (_, i) => i)
+    : [safeIdx];
+
+  // Helper: stdKgs (production-derived) for a single period.
+  const stdKgsForPeriod = (i, code) => {
+    const periodSnap = getSnapshotForPeriod(i, products, schedule, false);
+    let s = 0;
+    products.forEach((p) => {
+      const kgs = periodSnap.kgs?.[p.code] ?? 0;
+      const bomRow = p.bom.find((b) => b.code === code);
+      if (bomRow) s += kgs * bomRow.consumo;
+    });
+    return s;
+  };
 
   // === MP DETAIL: per code ===
+  // Dos vistas independientes sobre los mismos datos:
+  //   COMPRAS  : Price var = COMPRADOS × (Real Price − Std Price)          ← total de "Variaciones Mensuales · Std vs Real" en COMPRAS
+  //   PROD REAL: Usage var = $ REAL (Vales) − stdKgs producción × Std Price ← total de "Variación de Uso de MP" en PROD REAL
   const mpDetail = MP_CODES.map((code) => {
-    const cost = MP_COSTS[code] ?? 0;
-    let consumo = 0;
+    const stdPrice  = stdCosts[code]  ?? 0;
+    const realPrice = realCosts[code] ?? stdPrice;
+
+    // Std KGS (producción): suma sobre los periodos solicitados.
+    let stdKgs = 0;
     products.forEach((p) => {
       const kgs = snapshot.kgs?.[p.code] ?? 0;
       const bomRow = p.bom.find((b) => b.code === code);
-      if (bomRow) consumo += kgs * bomRow.consumo;
+      if (bomRow) stdKgs += kgs * bomRow.consumo;
     });
-    const std = consumo * cost;
-    const real = snapshot.realMp?.[code] ?? 0;
-    const varT = real - std;
-    return { code, name: MP_NAMES[code], um: MP_UM[code], cost, consumo, std, real, varT };
-  });
-  const totalMpStd = mpDetail.reduce((s, r) => s + r.std, 0);
-  const totalMpReal = mpDetail.reduce((s, r) => s + r.real, 0);
-  const varMp = totalMpReal - totalMpStd;
 
-  // === MOD/GV/GF DETAIL: per product ===
+    // Comprados: override por periodo, fallback a stdKgs de ese periodo.
+    let consumoCompras = 0;
+    periodList.forEach((i) => {
+      const ovr = compradosMap[i]?.[code];
+      if (ovr !== undefined && ovr !== null && Number.isFinite(parseFloat(ovr))) {
+        consumoCompras += parseFloat(ovr);
+      } else {
+        consumoCompras += stdKgsForPeriod(i, code);
+      }
+    });
+
+    // Vista COMPRAS (precio)
+    const stdC  = consumoCompras * stdPrice;
+    const realC = consumoCompras * realPrice;
+    const priceVar = realC - stdC;                    // = COMPRADOS × (realPrice − stdPrice)
+
+    // Vista PROD REAL (uso) — usa MP_COSTS (constante de planta) igual que PROD REAL sec.3,
+    // independiente de los costStd editados en Compras.
+    const stdPriceProd = MP_COSTS[code] ?? 0;
+    const stdP  = stdKgs * stdPriceProd;
+    const realP = snapshot.realMp?.[code] ?? 0;
+    const usageVar = realP - stdP;                    // total var de la sec.3 en PROD REAL
+
+    return {
+      code, name: MP_NAMES[code], um: MP_UM[code],
+      cost: stdPrice, stdPrice, realPrice,
+      consumo: consumoCompras, consumoCompras, stdKgs,
+      // Compras (default para clicks/modales — reflejan la tabla con COMPRADOS editable)
+      std: stdC,  real: realC,  varT: priceVar,
+      stdC, realC,
+      // Prod Real (para el panel de Uso de Material)
+      stdP, realP,
+      priceVar, usageVar,
+    };
+  });
+  // Totales para el panel de PRECIOS (alineados con COMPRAS)
+  const totalMpStd  = mpDetail.reduce((s, r) => s + r.stdC, 0);
+  const totalMpReal = mpDetail.reduce((s, r) => s + r.realC, 0);
+  // Totales para el panel de USO (alineados con PROD REAL)
+  const totalMpStdProd  = mpDetail.reduce((s, r) => s + r.stdP, 0);
+  const totalMpRealProd = mpDetail.reduce((s, r) => s + r.realP, 0);
+  const varMpPrice = mpDetail.reduce((s, r) => s + r.priceVar, 0);
+  const varMpUse   = mpDetail.reduce((s, r) => s + r.usageVar, 0);
+  const varMp      = varMpPrice + varMpUse;
+
+  // === MOD/GV/GF: detalle per-product (para modal) y totales desde Contabilidad ===
   const productCostDetail = products.map((p) => {
     const kgs = snapshot.kgs?.[p.code] ?? 0;
     const u = computeUnitCosts(p);
@@ -235,20 +329,24 @@ function computeProdRealVariations(periodIdx, accumulate = false) {
       modAbs: kgs * u.mod, gvAbs: kgs * u.gv, gfAbs: kgs * u.gf,
     };
   });
-  const absMod = productCostDetail.reduce((s, r) => s + r.modAbs, 0);
-  const absGv  = productCostDetail.reduce((s, r) => s + r.gvAbs, 0);
-  const absGf  = productCostDetail.reduce((s, r) => s + r.gfAbs, 0);
-  const realMod = snapshot.realMod ?? 0;
-  const realGv  = snapshot.realGv  ?? 0;
-  const realGf  = snapshot.realGf  ?? 0;
-  const varMod = realMod - absMod;
-  const varGv  = realGv  - absGv;
-  const varGf  = realGf  - absGf;
+  // Totales (real, absorción, variación) leídos de COSTOS (Cálculo) en Contabilidad
+  const realMod = sumContabRow(333, periodList);
+  const absMod  = sumContabRow(334, periodList);
+  const varMod  = sumContabRow(335, periodList);
+  const realGv  = sumContabRow(337, periodList);
+  const absGv   = sumContabRow(338, periodList);
+  const varGv   = sumContabRow(339, periodList);
+  const realGf  = sumContabRow(341, periodList);
+  const absGf   = sumContabRow(342, periodList);
+  const varGf   = sumContabRow(343, periodList);
 
   return {
     period,
     hasData: true,
-    mpDetail, totalMpStd, totalMpReal, varMp,
+    mpDetail,
+    totalMpStd, totalMpReal,           // vista COMPRAS (precio)
+    totalMpStdProd, totalMpRealProd,   // vista PROD REAL (uso)
+    varMp, varMpPrice, varMpUse,
     productCostDetail,
     absMod, realMod, varMod,
     absGv,  realGv,  varGv,
@@ -303,6 +401,8 @@ function computeEstadoResultados(periodIdx) {
     target.absGf      = src.absGf;
     target.costoStd   = src.totalMpStd + src.absMod + src.absGv + src.absGf;
     target.varMp      = src.varMp;
+    target.varMpPrice = src.varMpPrice;
+    target.varMpUse   = src.varMpUse;
     target.varMod     = src.varMod;
     target.varGv      = src.varGv;
     target.varGf      = src.varGf;
@@ -454,6 +554,19 @@ export default function DashboardGeneral() {
   const [ventaClick, setVentaClick] = useState(null);
   const [periodIdx, setPeriodIdx] = useState(readPeriodIdx);
   const [iaOpen, setIaOpen] = useState(false);
+  const [, setRefreshTick] = useState(0);
+
+  useEffect(() => {
+    const onChange = () => setRefreshTick((t) => t + 1);
+    window.addEventListener('app:data:changed', onChange);
+    window.addEventListener('storage', onChange);
+    window.addEventListener('focus', onChange);
+    return () => {
+      window.removeEventListener('app:data:changed', onChange);
+      window.removeEventListener('storage', onChange);
+      window.removeEventListener('focus', onChange);
+    };
+  }, []);
 
   const handleSelectMes = (e) => {
     const next = parseInt(e.target.value, 10);
@@ -508,43 +621,37 @@ export default function DashboardGeneral() {
         acumLabel={acumLabel(periodIdx)}
       />
 
-      <Panel
-        title="Variaciones de Materia Prima · YTD"
-        meta="Real vs Estándar · efecto sobre costo"
-      >
-        <div style={{ padding: '6px 18px 14px' }}>
-          <div style={{ maxWidth: 760, margin: '0 auto' }}>
-            <VarianceBars data={VARIATIONS} width={760} onSelect={setVarSide} />
-          </div>
-          <div style={{
-            marginTop: 10, paddingTop: 12,
-            borderTop: '1px solid var(--line)',
-            fontFamily: "'IBM Plex Serif'", fontSize: 12,
-            color: 'var(--ink-soft)', fontStyle: 'italic',
-          }}>
-            <strong style={{
-              color: 'var(--accent)', fontStyle: 'normal',
-              fontFamily: "'IBM Plex Mono'", fontSize: 10, letterSpacing: '0.08em',
-            }}>LECTURA</strong>
-            &nbsp; MP-D compensa por –$557K, pero MP-A erosiona +$348K. Saldo neto favorable.
-          </div>
-        </div>
-      </Panel>
-
       <VariationBox
-        title={`Variación · Uso de Material · ${prVarMes.period}`}
-        subtitle="Captura: $ Real (Vales) − $ Estándar consumido"
+        title={`Variaciones de Precio de la Materia Prima · ${prVarMes.period}`}
+        subtitle="Variación de PRECIO · fuente: Compras (COMPRADOS × Δ Std vs Real $/U)"
         contextRows={[
-          { label: 'Mes · $ Estándar', value: `$${fmtMoneyNoDec(prVarMes.totalMpStd)}` },
-          { label: 'Mes · $ Real',     value: `$${fmtMoneyNoDec(prVarMes.totalMpReal)}` },
-          { label: 'Mes · Variación',  value: fmtMoneySigned(prVarMes.varMp), highlight: true, signed: true },
-          { label: 'Acum · Variación', value: fmtMoneySigned(prVarAcum.varMp), highlight: true, signed: true },
+          { label: 'Mes · $ Estándar',   value: `$${fmtMoneyNoDec(prVarMes.totalMpStd)}` },
+          { label: 'Mes · $ Real',       value: `$${fmtMoneyNoDec(prVarMes.totalMpReal)}` },
+          { label: 'Mes · Var. Precio',  value: fmtMoneySigned(prVarMes.varMpPrice), highlight: true, signed: true },
+          { label: 'Acum · Var. Precio', value: fmtMoneySigned(prVarAcum.varMpPrice), highlight: true, signed: true },
         ]}
         mesLabel={prVarMes.period}
         acumLabel={acumLabel(periodIdx)}
-        chartDataMes={prVarMes.mpDetail.map((r) => ({ code: String(r.code), name: r.name, varT: r.varT }))}
+        chartDataMes={prVarMes.mpDetail.map((r) => ({ code: String(r.code), name: r.name, varT: r.priceVar }))}
         onItemClickMes={(item) => setMpClick({ code: parseInt(item.code, 10), scope: 'mes' })}
-        chartDataAcum={prVarAcum.mpDetail.map((r) => ({ code: String(r.code), name: r.name, varT: r.varT }))}
+        chartDataAcum={prVarAcum.mpDetail.map((r) => ({ code: String(r.code), name: r.name, varT: r.priceVar }))}
+        onItemClickAcum={(item) => setMpClick({ code: parseInt(item.code, 10), scope: 'acum' })}
+      />
+
+      <VariationBox
+        title={`Variación · Uso de Material · ${prVarMes.period}`}
+        subtitle="Variación de USO · fuente: Prod Real ($ Real Vales − KGS estándar producción × $ Std)"
+        contextRows={[
+          { label: 'Mes · $ Estándar', value: `$${fmtMoneyNoDec(prVarMes.totalMpStdProd)}` },
+          { label: 'Mes · $ Real',     value: `$${fmtMoneyNoDec(prVarMes.totalMpRealProd)}` },
+          { label: 'Mes · Var. Uso',   value: fmtMoneySigned(prVarMes.varMpUse), highlight: true, signed: true },
+          { label: 'Acum · Var. Uso',  value: fmtMoneySigned(prVarAcum.varMpUse), highlight: true, signed: true },
+        ]}
+        mesLabel={prVarMes.period}
+        acumLabel={acumLabel(periodIdx)}
+        chartDataMes={prVarMes.mpDetail.map((r) => ({ code: String(r.code), name: r.name, varT: r.usageVar }))}
+        onItemClickMes={(item) => setMpClick({ code: parseInt(item.code, 10), scope: 'mes' })}
+        chartDataAcum={prVarAcum.mpDetail.map((r) => ({ code: String(r.code), name: r.name, varT: r.usageVar }))}
         onItemClickAcum={(item) => setMpClick({ code: parseInt(item.code, 10), scope: 'acum' })}
       />
 
@@ -1258,15 +1365,15 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
                 expanded={desgloseExpanded}
                 onToggle={() => setDesgloseExpanded((v) => !v)}
                 breakdownMes={[
-                  { label: 'Var. Precio Materia Prima', value: mes.varMp },
-                  { label: 'Var. Uso de Material',  value: mes.varMp },
+                  { label: 'Var. Precio Materia Prima', value: mes.varMpPrice },
+                  { label: 'Var. Uso de Material',  value: mes.varMpUse },
                   { label: 'Var. MOD',              value: mes.varMod },
                   { label: 'Var. Gto. Variable',    value: mes.varGv },
                   { label: 'Var. Gto. Fijo',        value: mes.varGf },
                 ]}
                 breakdownAcum={[
-                  { label: 'Var. Materia Prima',    value: acum.varMp },
-                  { label: 'Var. Uso de Material',  value: acum.varMp },
+                  { label: 'Var. Precio Materia Prima', value: acum.varMpPrice },
+                  { label: 'Var. Uso de Material',  value: acum.varMpUse },
                   { label: 'Var. MOD',              value: acum.varMod },
                   { label: 'Var. Gto. Variable',    value: acum.varGv },
                   { label: 'Var. Gto. Fijo',        value: acum.varGf },

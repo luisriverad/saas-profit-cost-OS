@@ -92,7 +92,10 @@ const readStored = () => {
 };
 
 const persist = (data) => {
-  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    window.dispatchEvent(new CustomEvent('app:data:changed', { detail: { key: STORAGE_KEY } }));
+  } catch {}
 };
 
 export default function Compras() {
@@ -100,6 +103,7 @@ export default function Compras() {
   const ingStored = readIngStored();
   const [mps, setMps] = useState(() => stored?.mps ?? RAW_MATERIALS);
   const [history, setHistory] = useState(() => stored?.history ?? []);
+  const [comprados, setComprados] = useState(() => stored?.comprados ?? {});
   const [showAdd, setShowAdd] = useState(false);
   const [showHist, setShowHist] = useState(false);
   const [status, setStatus] = useState(null);
@@ -122,19 +126,25 @@ export default function Compras() {
   };
   const monthVariations = Object.keys(MP_COSTS).map((codeStr) => {
     const code = parseInt(codeStr, 10);
-    const cost = MP_COSTS[code] ?? 0;
-    let consumo = 0;
+    const masterMp = mps.find((m) => m.code === code);
+    const stdPrice  = masterMp?.costStd  ?? MP_COSTS[code] ?? 0;
+    const realPrice = masterMp?.costReal ?? MP_COSTS[code] ?? 0;
+    let consumoCalc = 0;
     ingProducts.forEach((p) => {
       const kgs = monthSnapshot.kgs?.[p.code] ?? 0;
       const bomRow = p.bom.find((b) => b.code === code);
-      if (bomRow) consumo += kgs * bomRow.consumo;
+      if (bomRow) consumoCalc += kgs * bomRow.consumo;
     });
-    const std = consumo * cost;
-    const real = monthSnapshot.realMp?.[code] ?? 0;
+    const override = comprados?.[vrPeriodIdx]?.[code];
+    const consumo = (override !== undefined && override !== null)
+      ? override
+      : consumoCalc;
+    const std  = consumo * stdPrice;
+    const real = consumo * realPrice;
     const varT = real - std;
     const name = ingProducts[0]?.bom?.find((b) => b.code === code)?.name ?? `MP ${code}`;
     const um = ingProducts[0]?.bom?.find((b) => b.code === code)?.um ?? 'KGS';
-    return { code, name, um, consumo, std, real, varT, varU: cost ? (varT / consumo) : 0 };
+    return { code, name, um, consumo, std, real, varT, varU: realPrice - stdPrice };
   });
 
   const guardProps = authorized
@@ -190,13 +200,23 @@ export default function Compras() {
     const next = [...mps];
     next[i] = { ...next[i], [field]: parseFloat(v) || 0 };
     setMps(next);
-    persist({ mps: next, history });
+    persist({ mps: next, history, comprados });
+  };
+
+  const updateComprados = (pIdx, mpCode, value) => {
+    const num = parseFloat(String(value).replace(/[^\d.\-]/g, '')) || 0;
+    const next = {
+      ...comprados,
+      [pIdx]: { ...(comprados[pIdx] ?? {}), [mpCode]: Math.max(0, num) },
+    };
+    setComprados(next);
+    persist({ mps, history, comprados: next });
   };
 
   const handleAddMp = ({ code, name, um, costStd, costReal }) => {
     const next = [...mps, { code, name, um, costStd, costReal }];
     setMps(next);
-    persist({ mps: next, history });
+    persist({ mps: next, history, comprados });
     flash('ok', `Materia prima ${code} · ${name} agregada`);
     setShowAdd(false);
     traza(`MP ${code} · ${name} agregada (Std $${costStd} · Real $${costReal})`);
@@ -206,7 +226,7 @@ export default function Compras() {
     const target = mps.find((m) => m.code === code);
     const next = mps.filter((m) => m.code !== code);
     setMps(next);
-    persist({ mps: next, history });
+    persist({ mps: next, history, comprados });
     flash('ok', `MP ${code} eliminada`);
     traza(`MP ${code} · ${target?.name ?? ''} eliminada`);
   };
@@ -241,7 +261,7 @@ export default function Compras() {
     };
     const newHistory = [snapshot, ...history];
     setHistory(newHistory);
-    persist({ mps, history: newHistory });
+    persist({ mps, history: newHistory, comprados });
     flash('ok', `Mes cerrado · ${period}`);
     traza(`Cerró mes ${period} (Var Total: $${fmtMoneyNoDec(snapshot.totalVar)})`);
   };
@@ -251,7 +271,7 @@ export default function Compras() {
     if (!ok) return;
     const newHistory = history.filter((h) => h.period !== period);
     setHistory(newHistory);
-    persist({ mps, history: newHistory });
+    persist({ mps, history: newHistory, comprados });
     flash('ok', `Cierre ${period} eliminado`);
     traza(`Eliminó cierre histórico ${period}`);
   };
@@ -448,7 +468,16 @@ export default function Compras() {
                 <tr key={v.code}>
                   <td className="mp-code">{v.code}</td>
                   <td>{v.name}</td>
-                  <td className="cell-master num">{fmtUnits(Math.round(v.consumo))}</td>
+                  <td className="cell-input num">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={fmtUnits(Math.round(v.consumo))}
+                      onChange={(e) => updateComprados(vrPeriodIdx, v.code, e.target.value)}
+                      onFocus={(e) => { e.target.select(); focusCell(v.consumo, `Comprados ${v.name} · ${vrPeriod}`); }}
+                      onBlur={(e) => blurCell(parseFloat(String(e.target.value).replace(/[^\d.\-]/g, '')) || 0)}
+                    />
+                  </td>
                   <td className="cell-formula num">${fmtMoneyNoDec(v.std)}</td>
                   <td className="cell-formula num">${fmtMoneyNoDec(v.real)}</td>
                   <td className={`cell-formula num ${cls}`}>
@@ -460,6 +489,26 @@ export default function Compras() {
                 </tr>
               );
             })}
+            {(() => {
+              const totalVar = monthVariations.reduce((s, v) => s + v.varT, 0);
+              const totalSign = totalVar > 0 ? '+' : totalVar < 0 ? '−' : '';
+              return (
+                <tr className="row-total">
+                  <td colSpan={6} style={{
+                    textAlign: 'right',
+                    fontFamily: "'IBM Plex Sans'",
+                    textTransform: 'uppercase',
+                    fontSize: 10,
+                    letterSpacing: '0.08em',
+                  }}>
+                    TOTAL
+                  </td>
+                  <td className="num" style={{ background: '#0a0a0a', color: '#fff' }}>
+                    {totalSign}${fmtMoneyNoDec(Math.abs(totalVar))}
+                  </td>
+                </tr>
+              );
+            })()}
           </tbody>
         </table>
       </Panel>

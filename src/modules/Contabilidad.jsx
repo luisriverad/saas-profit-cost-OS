@@ -393,7 +393,12 @@ function classifyRow(r) {
   if (r.descCc === 'TOTALES') return 'subtotal';
   const sectionHeaders = ['GASTO TOTAL PLANTA', 'PRORRATEO DE CENTRO DE COSTOS DE SERVICIOS A PRODUCTIVOS'];
   if (r.clas && sectionHeaders.includes(r.clas) && !r.cuenta) return 'section';
-  const summaryWords = ['ABSORCIONES POR PRODUCCION', 'GASTO PROYECTADO', 'VARIACIONES', 'MOD REAL', 'GTOS V', 'GTOS F', 'ABSORCION', 'VAR'];
+  const summaryWords = [
+    'ABSORCIONES POR PRODUCCION', 'GASTO PROYECTADO',
+    'VARIACIONES', 'VARIACIONES TOTALES DE MOD, GV y GF',
+    'MOD REAL', 'GTOS V', 'GTOS F', 'ABSORCION',
+    'VAR', 'VARIACIÓN MOD', 'VARIACIÓN GTOS V', 'VARIACIÓN GF',
+  ];
   if (!r.cc && r.clas && summaryWords.includes(r.clas) && !r.cuenta) return 'summary';
   if (!r.cc && !r.cuenta && r.clas && ['MANO DE OBRA DIRECTA','GASTOS VARIABLES','GASTOS FIJOS','TOTALES'].includes(r.clas)) {
     return 'plantSubtotal';

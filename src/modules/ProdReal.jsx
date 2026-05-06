@@ -55,7 +55,10 @@ const readStored = () => {
 };
 
 const persist = (data) => {
-  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    window.dispatchEvent(new CustomEvent('app:data:changed', { detail: { key: STORAGE_KEY } }));
+  } catch {}
 };
 
 const readStoredPeriodIdx = () => {
