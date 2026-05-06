@@ -53,6 +53,14 @@ body {
   flex-direction: column;
 }
 
+/* ===================== STICKY HEADER ===================== */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
 /* ===================== TOPBAR ===================== */
 .topbar {
   background: var(--header-bar);
@@ -154,6 +162,14 @@ body {
   justify-content: space-between;
 }
 .navbar-tabs { display: flex; }
+.nav-group {
+  display: flex;
+  align-items: stretch;
+}
+.nav-group-a { background: #2e4364; }
+.nav-group-b { background: #5b432a; }
+.nav-group-c { background: #2c5249; }
+.nav-group + .nav-group { border-left: 1px solid rgba(255, 255, 255, 0.16); }
 .nav-tab {
   padding: 14px 18px;
   font-family: 'IBM Plex Mono', monospace;

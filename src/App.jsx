@@ -46,10 +46,12 @@ export default function App() {
 
   return (
     <>
-      <Topbar />
-      <TickerScroll />
-      <Navbar active={active} onChange={handleChange} />
-      <LegendBar />
+      <div className="app-header">
+        <Topbar />
+        <TickerScroll />
+        <Navbar active={active} onChange={handleChange} />
+        <LegendBar />
+      </div>
 
       <div className="content">
         <ActiveModule />

@@ -506,8 +506,6 @@ export default function DashboardGeneral() {
         data={er}
         mesLabel={prVarMes.period}
         acumLabel={acumLabel(periodIdx)}
-        ventaVarMesTotal={ventaVarMes.items.reduce((s, i) => s + i.rawVar, 0)}
-        ventaVarAcumTotal={ventaVarAcum.items.reduce((s, i) => s + i.rawVar, 0)}
       />
 
       <Panel
@@ -895,7 +893,7 @@ function HeroCard({ label, value, sub, deltaText, positive, accent }) {
   );
 }
 
-function EstadoResultadosPanel({ data, mesLabel, acumLabel, ventaVarMesTotal = 0, ventaVarAcumTotal = 0 }) {
+function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
   const { mes, acum, fcst, fcstMes } = data;
   const ventasDelta = deltaPct(acum.ventas, fcst.ventas);
   const utBrutaDelta = deltaPct(acum.utBruta, fcst.utBruta);
@@ -1265,7 +1263,6 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel, ventaVarMesTotal = 0
                   { label: 'Var. MOD',              value: mes.varMod },
                   { label: 'Var. Gto. Variable',    value: mes.varGv },
                   { label: 'Var. Gto. Fijo',        value: mes.varGf },
-                  { label: 'Var. en la Vta.',       value: ventaVarMesTotal, goodIfNegative: false },
                 ]}
                 breakdownAcum={[
                   { label: 'Var. Materia Prima',    value: acum.varMp },
@@ -1273,7 +1270,6 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel, ventaVarMesTotal = 0
                   { label: 'Var. MOD',              value: acum.varMod },
                   { label: 'Var. Gto. Variable',    value: acum.varGv },
                   { label: 'Var. Gto. Fijo',        value: acum.varGf },
-                  { label: 'Var. en la Vta.',       value: ventaVarAcumTotal, goodIfNegative: false },
                 ]}
               />
               <Row label="(=) Total Costo de Ventas" mesV={mes.costoTotal} fcstMesV={fcstMes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost isSubtotal />
