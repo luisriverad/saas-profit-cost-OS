@@ -406,22 +406,22 @@ export default function Compras() {
                   <td className="center">{m.um}</td>
                   <td className="cell-input num" {...guardProps}>
                     <input
-                      type="number"
-                      step="0.01"
-                      value={m.costStd}
-                      onChange={(e) => update(i, 'costStd', e.target.value)}
+                      type="text"
+                      inputMode="decimal"
+                      value={`$${fmtMoney(m.costStd)}`}
+                      onChange={(e) => update(i, 'costStd', e.target.value.replace(/[^\d.\-]/g, ''))}
                       onFocus={(e) => { e.target.select(); focusCell(m.costStd, `Costo Std ${m.name}`); }}
-                      onBlur={(e) => blurCell(parseFloat(e.target.value) || 0)}
+                      onBlur={(e) => blurCell(parseFloat(String(e.target.value).replace(/[^\d.\-]/g, '')) || 0)}
                     />
                   </td>
-                  <td className="cell-input num" {...guardProps}>
+                  <td className="cell-input num">
                     <input
-                      type="number"
-                      step="0.01"
-                      value={m.costReal}
-                      onChange={(e) => update(i, 'costReal', e.target.value)}
+                      type="text"
+                      inputMode="decimal"
+                      value={`$${fmtMoney(m.costReal)}`}
+                      onChange={(e) => update(i, 'costReal', e.target.value.replace(/[^\d.\-]/g, ''))}
                       onFocus={(e) => { e.target.select(); focusCell(m.costReal, `Costo Real ${m.name}`); }}
-                      onBlur={(e) => blurCell(parseFloat(e.target.value) || 0)}
+                      onBlur={(e) => blurCell(parseFloat(String(e.target.value).replace(/[^\d.\-]/g, '')) || 0)}
                     />
                   </td>
                   <td className={`cell-formula num ${cls}`}>

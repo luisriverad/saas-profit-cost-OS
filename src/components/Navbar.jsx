@@ -23,6 +23,7 @@ const TAB_GROUPS = [
       { id: 'contabilidad',num: '07', label: 'Contabilidad'      },
       { id: 'cuotas',      num: '08', label: 'Cuotas/Min'        },
       { id: 'costeo',      num: '09', label: 'Hojas de Costeo'   },
+      { id: 'inventarios', num: '11', label: 'Inventarios'       },
     ],
   },
 ];

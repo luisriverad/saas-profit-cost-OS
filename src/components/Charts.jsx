@@ -246,6 +246,8 @@ export function VarianceBars({ data, height, width = 560, onSelect, onItemClick 
         const isZero = d.varT === 0;
         const barX = isNeg ? center - w : center;
         const color = isNeg ? COLORS.pos : (d.varT > 0 ? COLORS.neg : COLORS.line);
+        const fmtStr = fmt(d.varT);
+        const estTextW = fmtStr.length * 6.5; // ancho aproximado del texto del valor
 
         // Si la barra es lo bastante ancha, el valor va DENTRO en blanco;
         // si es corta, va FUERA con el color del estado.
@@ -259,10 +261,23 @@ export function VarianceBars({ data, height, width = 560, onSelect, onItemClick 
           textX = isNeg ? barX + 8 : barX + w - 8;
           textAnchor = isNeg ? 'start' : 'end';
           textColor = '#fff';
+        } else if (isNeg) {
+          // Negativo afuera-izquierda; si chocaría con la etiqueta, se voltea afuera-derecha.
+          const proposedX = barX - 6;
+          const leftEdge = proposedX - estTextW;
+          const labelRightSafe = labelW + 10; // colchón mínimo respecto a la etiqueta
+          if (leftEdge < labelRightSafe) {
+            textX = barX + w + 6;
+            textAnchor = 'start';
+          } else {
+            textX = proposedX;
+            textAnchor = 'end';
+          }
+          textColor = COLORS.pos;
         } else {
-          textX = isNeg ? barX - 6 : barX + w + 6;
-          textAnchor = isNeg ? 'end' : 'start';
-          textColor = isNeg ? COLORS.pos : COLORS.neg;
+          textX = barX + w + 6;
+          textAnchor = 'start';
+          textColor = COLORS.neg;
         }
 
         const clickable = (onSelect || onItemClick) && !isZero;

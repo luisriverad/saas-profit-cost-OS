@@ -18,6 +18,7 @@ import Cuotas from './modules/Cuotas';
 import Costeo from './modules/Costeo';
 import PNLView from './modules/PNL';
 import Trazabilidad from './modules/Trazabilidad';
+import Inventarios from './modules/Inventarios';
 
 const MODULES = {
   general:      DashboardGeneral,
@@ -32,6 +33,7 @@ const MODULES = {
   costeo:       Costeo,
   pnl:          PNLView,
   trazabilidad: Trazabilidad,
+  inventarios:  Inventarios,
 };
 
 export default function App() {

@@ -75,6 +75,23 @@ body {
   border-bottom: 2px solid var(--accent);
 }
 .topbar-left { display: flex; align-items: center; gap: 18px; }
+.brand-logo-frame {
+  background: #fff;
+  border-radius: 4px;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  height: 38px;
+}
+.brand-logo {
+  max-height: 30px;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+}
 .brand {
   font-family: 'IBM Plex Serif', serif;
   font-weight: 700;

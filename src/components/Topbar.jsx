@@ -2,8 +2,12 @@ export default function Topbar() {
   return (
     <div className="topbar">
       <div className="topbar-left">
-        <div className="brand">
-          AXON <span className="accent">-</span> COST <span className="accent">-</span> OS
+        <div className="brand-logo-frame">
+          <img
+            src="/logo_n.png"
+            alt="Manufacturas Adir SA de CV"
+            className="brand-logo"
+          />
         </div>
         <div className="ticker">
           <span><span style={{ color: '#9c9c9c' }}>MARGEN BRUTO</span> <b>28.6%</b> <span className="up">▲ 0.4</span></span>
