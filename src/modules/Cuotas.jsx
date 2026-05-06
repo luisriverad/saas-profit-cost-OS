@@ -46,11 +46,10 @@ const deriveConsolidated = (rows) => {
 function CCRateTable({ cc, editable, onChange }) {
   const cellInput = (val, field) => (
     <input
-      type="number"
-      step="1"
-      min="0"
-      value={val}
-      onChange={(e) => onChange(field, e.target.value)}
+      type="text"
+      inputMode="numeric"
+      value={fmtMoneyNoDec(val ?? 0)}
+      onChange={(e) => onChange(field, e.target.value.replace(/[^0-9.\-]/g, ''))}
       onFocus={(e) => e.target.select()}
       style={{
         background: 'transparent',

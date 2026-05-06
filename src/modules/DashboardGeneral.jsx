@@ -502,7 +502,13 @@ export default function DashboardGeneral() {
         }
       />
 
-      <EstadoResultadosPanel data={er} mesLabel={prVarMes.period} acumLabel={acumLabel(periodIdx)} />
+      <EstadoResultadosPanel
+        data={er}
+        mesLabel={prVarMes.period}
+        acumLabel={acumLabel(periodIdx)}
+        ventaVarMesTotal={ventaVarMes.items.reduce((s, i) => s + i.rawVar, 0)}
+        ventaVarAcumTotal={ventaVarAcum.items.reduce((s, i) => s + i.rawVar, 0)}
+      />
 
       <Panel
         title="Variaciones de Materia Prima · YTD"
@@ -700,6 +706,11 @@ function VariationBox({
   chartDataMes, onItemClickMes,
   chartDataAcum, onItemClickAcum,
 }) {
+  // Detail rows (Estándar / Real / etc.) y totales (Variación) para el bloque "Cifras".
+  const detailRows = (contextRows ?? []).filter((r) => !r.highlight);
+  const totalRows  = (contextRows ?? []).filter((r) =>  r.highlight);
+  const parseSigned = (s) => parseFloat(String(s).replace(/[^\d.\-−]/g, '').replace('−', '-')) || 0;
+
   return (
     <Panel title={title} meta={subtitle}>
       <div style={{
@@ -715,29 +726,65 @@ function VariationBox({
             fontFamily: "'IBM Plex Mono'", fontSize: 9, letterSpacing: '0.1em',
             color: 'var(--ink-mute)', textTransform: 'uppercase',
           }}>Cifras</div>
-          {contextRows && (
+          {detailRows.length > 0 && (
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
-              {contextRows.map((row, i) => (
+              {detailRows.map((row, i) => (
                 <div key={i} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
                   fontFamily: "'IBM Plex Mono'", fontSize: 11,
                   padding: '3px 0',
-                  fontWeight: row.highlight ? 700 : 400,
-                  color: row.highlight ? 'var(--ink)' : 'var(--ink-soft)',
+                  color: 'var(--ink-soft)',
                 }}>
                   <span>{row.label}</span>
-                  <span style={{
-                    fontVariantNumeric: 'tabular-nums',
-                    color: row.signed ? colorFor(parseFloat(String(row.value).replace(/[^\d.\-−]/g, '').replace('−', '-')) || 0) : undefined,
-                  }}>{row.value}</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{row.value}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* TOTALES — golpe visual de 1 segundo */}
+          {totalRows.length > 0 && (
+            <div style={{
+              marginTop: 10,
+              borderTop: '2px solid var(--ink)',
+              paddingTop: 10,
+              display: 'flex', flexDirection: 'column', gap: 8,
+            }}>
+              {totalRows.map((row, i) => {
+                const num = parseSigned(row.value);
+                const color = row.signed ? colorFor(num) : 'var(--ink)';
+                return (
+                  <div key={i} style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
+                    padding: '6px 10px',
+                    background: 'var(--panel-alt, #f6f3ea)',
+                    border: '1px solid var(--line)',
+                  }}>
+                    <span style={{
+                      fontFamily: "'IBM Plex Mono'", fontSize: 9,
+                      letterSpacing: '0.12em', textTransform: 'uppercase',
+                      color: 'var(--ink-mute)',
+                      alignSelf: 'flex-start',
+                    }}>
+                      {row.label}
+                    </span>
+                    <span style={{
+                      fontFamily: "'IBM Plex Mono'", fontVariantNumeric: 'tabular-nums',
+                      fontSize: 26, fontWeight: 700, lineHeight: 1.1,
+                      color,
+                      marginTop: 2,
+                    }}>
+                      {row.value}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
 
         {/* Gráfica MES */}
-        <div>
+        <div style={{ paddingRight: 10 }}>
           <ChartLabel text={`MES · ${mesLabel}`} accent={false} />
           <VarianceBars data={chartDataMes} width={520} onItemClick={onItemClickMes} />
           <div style={{
@@ -748,8 +795,11 @@ function VariationBox({
           </div>
         </div>
 
-        {/* Gráfica ACUMULADO */}
-        <div>
+        {/* Gráfica ACUMULADO — separada por línea sutil del bloque MES */}
+        <div style={{
+          borderLeft: '1px solid var(--line)',
+          paddingLeft: 18,
+        }}>
           <ChartLabel text={`ACUMULADO · ${acumLbl}`} accent />
           <VarianceBars data={chartDataAcum} width={520} onItemClick={onItemClickAcum} />
           <div style={{
@@ -845,11 +895,12 @@ function HeroCard({ label, value, sub, deltaText, positive, accent }) {
   );
 }
 
-function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
+function EstadoResultadosPanel({ data, mesLabel, acumLabel, ventaVarMesTotal = 0, ventaVarAcumTotal = 0 }) {
   const { mes, acum, fcst, fcstMes } = data;
   const ventasDelta = deltaPct(acum.ventas, fcst.ventas);
   const utBrutaDelta = deltaPct(acum.utBruta, fcst.utBruta);
   const utOpDelta = deltaPct(acum.utOp, fcst.utOp);
+  const [desgloseExpanded, setDesgloseExpanded] = useState(false);
 
   const Row = ({ label, mesV, fcstMesV, acumV, fcstV, isCost, isSubtotal, isMargin, indent }) => {
     const wrapper = (v) => (isCost && typeof v === 'number') ? -Math.abs(v) : v;
@@ -933,37 +984,135 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
   // Fila para variaciones de manufactura (Real − Estándar). Convención:
   //   negativo = favorable (verde) · positivo = desfavorable (rojo).
   // Forecast no tiene variaciones (se asume al estándar) → muestra "—".
-  const VariationRow = ({ label, mesV, acumV }) => {
+  // main=true: fila principal del P&L (bold, color de acento, botón toggle de desglose).
+  // breakdownMes/breakdownAcum: array de { label, value, goodIfNegative }. Se muestran sólo cuando expanded=true.
+  const VariationRow = ({ label, mesV, acumV, main, breakdownMes, breakdownAcum, expanded, onToggle }) => {
     const colorMes  = mesV  < 0 ? 'var(--pos)' : mesV  > 0 ? 'var(--neg)' : 'var(--ink-mute)';
     const colorAcum = acumV < 0 ? 'var(--pos)' : acumV > 0 ? 'var(--neg)' : 'var(--ink-mute)';
     const dispMes   = mesV  === 0 ? '$0' : fmtMoneyMSigned(mesV);
     const dispAcum  = acumV === 0 ? '$0' : fmtMoneyMSigned(acumV);
     const numCell = {
-      padding: '8px 12px', textAlign: 'right',
+      padding: main ? '12px 12px' : '8px 12px',
+      textAlign: 'right',
       fontFamily: "'IBM Plex Mono'", fontVariantNumeric: 'tabular-nums',
-      fontSize: 11, fontWeight: 600,
+      fontSize: main ? 14 : 11,
+      fontWeight: main ? 700 : 600,
     };
     const muteCell = {
-      ...numCell, fontWeight: 400, fontStyle: 'italic',
+      ...numCell,
+      fontWeight: main ? 600 : 400,
+      fontStyle: main ? 'normal' : 'italic',
       color: 'var(--ink-mute)',
     };
+
+    const renderList = (items) => (
+      <div style={{
+        display: 'flex', flexDirection: 'column',
+        fontFamily: "'IBM Plex Sans', sans-serif",
+        fontSize: 11,
+        color: 'var(--ink-soft)',
+      }}>
+        {items.map((c) => {
+          const goodIfNegative = c.goodIfNegative !== false;
+          const fav   = goodIfNegative ? c.value < 0 : c.value > 0;
+          const unfav = goodIfNegative ? c.value > 0 : c.value < 0;
+          const color = fav ? 'var(--pos)' : unfav ? 'var(--neg)' : 'var(--ink-mute)';
+          const disp = c.value === 0 ? '$0' : fmtMoneyMSigned(c.value);
+          return (
+            <div key={c.label} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+              padding: '3px 0',
+              borderBottom: '1px dotted var(--line-soft)',
+            }}>
+              <span>{c.label}</span>
+              <span style={{
+                fontFamily: "'IBM Plex Mono'", fontVariantNumeric: 'tabular-nums',
+                color, fontWeight: 600,
+              }}>{disp}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    const hasBreakdown = main && breakdownMes && breakdownAcum;
+    const showDesglose = hasBreakdown && expanded;
+
     return (
-      <tr style={{ background: '#fafafa', borderBottom: '1px solid var(--line-soft)' }}>
-        <td style={{
-          padding: '8px 14px', paddingLeft: 32,
-          fontFamily: "'IBM Plex Sans', sans-serif",
-          fontSize: 11, fontStyle: 'italic',
-          color: 'var(--ink-soft)',
+      <>
+        <tr style={{
+          background: main ? '#fff7e0' : '#fafafa',
+          borderTop: main ? '1px solid var(--gold)' : 'none',
+          borderBottom: main && !showDesglose ? '1px solid var(--gold)' : '1px solid var(--line-soft)',
         }}>
-          {label}
-        </td>
-        <td style={{ ...numCell, color: colorMes }}>{dispMes}</td>
-        <td style={muteCell}>—</td>
-        <td style={muteCell}>—</td>
-        <td style={{ ...numCell, color: colorAcum, borderLeft: '1px solid var(--line)' }}>{dispAcum}</td>
-        <td style={muteCell}>—</td>
-        <td style={muteCell}>—</td>
-      </tr>
+          <td style={{
+            padding: main ? '12px 14px 10px' : '8px 14px',
+            paddingLeft: main ? 14 : 32,
+            fontFamily: main ? "'IBM Plex Serif'" : "'IBM Plex Sans', sans-serif",
+            fontSize: main ? 13 : 11,
+            fontStyle: main ? 'normal' : 'italic',
+            fontWeight: main ? 700 : 'inherit',
+            color: main ? 'var(--accent-3)' : 'var(--ink-soft)',
+            letterSpacing: main ? '0.01em' : 'normal',
+          }}>
+            <div>{label}</div>
+            {hasBreakdown && (
+              <button
+                type="button"
+                onClick={onToggle}
+                style={{
+                  marginTop: 4,
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontFamily: "'IBM Plex Mono'",
+                  fontSize: 9, letterSpacing: '0.12em',
+                  color: 'var(--ink-mute)',
+                  textTransform: 'uppercase',
+                  padding: 0,
+                  display: 'block',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent-3)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--ink-mute)'; }}
+              >
+                {expanded ? '▾ Ocultar desglose' : '▸ Click para ver desglose'}
+              </button>
+            )}
+          </td>
+          <td style={{ ...numCell, color: colorMes }}>{dispMes}</td>
+          <td style={muteCell}>—</td>
+          <td style={muteCell}>—</td>
+          <td style={{ ...numCell, color: colorAcum, borderLeft: '1px solid var(--line)' }}>{dispAcum}</td>
+          <td style={muteCell}>—</td>
+          <td style={muteCell}>—</td>
+        </tr>
+        {showDesglose && (
+          <tr style={{
+            background: '#fffbe8',
+            borderBottom: '1px solid var(--gold)',
+          }}>
+            <td style={{
+              padding: '10px 14px 12px',
+              verticalAlign: 'top',
+              fontFamily: "'IBM Plex Mono'",
+              fontSize: 9, letterSpacing: '0.10em',
+              color: 'var(--ink-mute)',
+              textTransform: 'uppercase',
+            }}>
+              ↳ desglose
+            </td>
+            <td colSpan={3} style={{ padding: '10px 14px 12px', verticalAlign: 'top' }}>
+              {renderList(breakdownMes)}
+            </td>
+            <td colSpan={3} style={{
+              padding: '10px 14px 12px', verticalAlign: 'top',
+              borderLeft: '1px solid var(--line)',
+            }}>
+              {renderList(breakdownAcum)}
+            </td>
+          </tr>
+        )}
+      </>
     );
   };
 
@@ -1103,15 +1252,31 @@ function EstadoResultadosPanel({ data, mesLabel, acumLabel }) {
             <tbody>
               <Row label="Ventas Netas" mesV={mes.ventas} fcstMesV={fcstMes.ventas} acumV={acum.ventas} fcstV={fcst.ventas} />
               <Row label="(−) Costo de Ventas Estándar" mesV={mes.costoStd} fcstMesV={fcstMes.costoTotal} acumV={acum.costoStd} fcstV={fcst.costoTotal} isCost />
-              <Row label="Materia Prima · Std" mesV={mes.costoMpStd} fcstMesV={fcstMes.costoTotal * (mes.costoMpStd / Math.max(mes.costoStd, 1))} acumV={acum.costoMpStd} fcstV={fcst.costoTotal * (acum.costoMpStd / Math.max(acum.costoStd, 1))} isCost indent />
-              <Row label="Mano de Obra · Absorción" mesV={mes.absMod} fcstMesV={fcstMes.costoTotal * (mes.absMod / Math.max(mes.costoStd, 1))} acumV={acum.absMod} fcstV={fcst.costoTotal * (acum.absMod / Math.max(acum.costoStd, 1))} isCost indent />
-              <Row label="Gastos Variables · Absorción" mesV={mes.absGv} fcstMesV={fcstMes.costoTotal * (mes.absGv / Math.max(mes.costoStd, 1))} acumV={acum.absGv} fcstV={fcst.costoTotal * (acum.absGv / Math.max(acum.costoStd, 1))} isCost indent />
-              <Row label="Gastos Fijos · Absorción" mesV={mes.absGf} fcstMesV={fcstMes.costoTotal * (mes.absGf / Math.max(mes.costoStd, 1))} acumV={acum.absGf} fcstV={fcst.costoTotal * (acum.absGf / Math.max(acum.costoStd, 1))} isCost indent />
-              <VariationRow label="Variación · Materia Prima"      mesV={mes.varMp}    acumV={acum.varMp} />
-              <VariationRow label="Variación · Mano de Obra"       mesV={mes.varMod}   acumV={acum.varMod} />
-              <VariationRow label="Variación · Gastos Indirectos"  mesV={mes.varGv}    acumV={acum.varGv} />
-              <VariationRow label="Variación · Absorción G. Fijos" mesV={mes.varGf}    acumV={acum.varGf} />
-              <Row label="(−) Costo de Ventas Ajustado" mesV={mes.costoTotal} fcstMesV={fcstMes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost isSubtotal />
+              <VariationRow
+                label="(+/−) Variaciones"
+                mesV={mes.varTotal}
+                acumV={acum.varTotal}
+                main
+                expanded={desgloseExpanded}
+                onToggle={() => setDesgloseExpanded((v) => !v)}
+                breakdownMes={[
+                  { label: 'Var. Materia Prima',    value: mes.varMp },
+                  { label: 'Var. Uso de Material',  value: mes.varMp },
+                  { label: 'Var. MOD',              value: mes.varMod },
+                  { label: 'Var. Gto. Variable',    value: mes.varGv },
+                  { label: 'Var. Gto. Fijo',        value: mes.varGf },
+                  { label: 'Var. en la Vta.',       value: ventaVarMesTotal, goodIfNegative: false },
+                ]}
+                breakdownAcum={[
+                  { label: 'Var. Materia Prima',    value: acum.varMp },
+                  { label: 'Var. Uso de Material',  value: acum.varMp },
+                  { label: 'Var. MOD',              value: acum.varMod },
+                  { label: 'Var. Gto. Variable',    value: acum.varGv },
+                  { label: 'Var. Gto. Fijo',        value: acum.varGf },
+                  { label: 'Var. en la Vta.',       value: ventaVarAcumTotal, goodIfNegative: false },
+                ]}
+              />
+              <Row label="(=) Total Costo de Ventas" mesV={mes.costoTotal} fcstMesV={fcstMes.costoTotal} acumV={acum.costoTotal} fcstV={fcst.costoTotal} isCost isSubtotal />
               <Row label="═ Utilidad Bruta" mesV={mes.utBruta} fcstMesV={fcstMes.utBruta} acumV={acum.utBruta} fcstV={fcst.utBruta} isSubtotal />
               <Row label="Margen Bruto" mesV={mes.margenBruto} fcstMesV={fcstMes.margenBruto} acumV={acum.margenBruto} fcstV={fcst.margenBruto} isMargin indent />
               <Row label="(−) Gastos de Operación" mesV={mes.gtosOp} fcstMesV={fcstMes.gtosOp} acumV={acum.gtosOp} fcstV={fcst.gtosOp} isCost />
